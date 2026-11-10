@@ -55,6 +55,7 @@ export interface IgComment {
   timestamp?: string;
   username?: string;
   from?: { id: string; username?: string };
+  replies?: { data?: IgComment[] };
 }
 
 export interface IgMedia {
@@ -289,12 +290,19 @@ export class InstagramClient {
   // ---- reads ----
 
   /** Read comments on a media object. Only called for media attached to an active campaign. */
-  async getComments(mediaId: string, limit = 50): Promise<IgComment[]> {
+  async getComments(mediaId: string, limit = 100): Promise<IgComment[]> {
     const res = await this.get<{ data?: IgComment[] }>(`/${mediaId}/comments`, {
-      fields: "id,text,timestamp,username,from{id,username}",
+      // Replies to other comments are not top-level comments; ask for them too, or a keyword typed
+      // as a reply would never be seen.
+      fields: "id,text,timestamp,username,from{id,username},replies.limit(25){id,text,timestamp,username,from{id,username}}",
       limit: String(limit),
     });
-    return res.data ?? [];
+    const out: IgComment[] = [];
+    for (const c of res.data ?? []) {
+      out.push(c);
+      for (const r of c.replies?.data ?? []) out.push(r);
+    }
+    return out;
   }
 
   /** Read recent conversations + their messages (how inbound taps/replies arrive without webhooks). */

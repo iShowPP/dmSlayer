@@ -6,6 +6,7 @@ import { getActiveCampaigns, getLiveSince, countEventsGlobal, kvGet, kvSet, now 
 import type { Runtime } from "../runtime";
 import { toUnixSeconds } from "../runtime";
 import type { NormalizedComment } from "../types";
+import { logActivity, loggedCommentIds } from "../log";
 
 // Private replies cap ~750/hr; DMs ~200/hr. Openings are private replies that open a DM, so we
 // pace against the stricter DM limit with margin.
@@ -41,18 +42,13 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
       console.warn(`[dmSlayer] getComments(${mediaId}) failed: ${e instanceof Error ? e.message : e}`);
       continue;
     }
+    const known = await loggedCommentIds(db, mediaId);
     for (const c of comments) {
-      const igsid = c.from?.id;
-      if (!igsid) {
-        // Meta's Graph API omits `from.id` for some commenters (permissions/visibility vary by
-        // account); without it we can't correlate a later DM reply, so the comment is unreachable.
-        // Logged (rather than silently dropped) since this can otherwise look identical to a
-        // keyword-matching failure from the outside.
-        console.warn(
-          `[dmSlayer] comment ${c.id} on ${mediaId} has no commenter id (from=${JSON.stringify(c.from)}); skipping: "${c.text ?? ""}"`,
-        );
-        continue;
-      }
+      // Our own comments (public replies) are not leads.
+      if (c.from?.id === rt.igUserId) continue;
+      // Meta omits `from.id` for some commenters. A private reply only needs the comment id, so such
+      // a comment is still answered; it just gets a stand-in person id, unique to that comment.
+      const igsid = c.from?.id ?? `anon:${c.id}`;
       const evt: NormalizedComment = {
         kind: "comment",
         comment_id: c.id,
@@ -70,6 +66,18 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
       // The engine only marks a comment processed once it has fully succeeded, so a comment that
       // throws here is left unprocessed and retried cleanly on the next tick.
       const eligible = campaigns.filter((k) => evt.timestamp >= (liveSince.get(k.campaign_id) ?? 0));
+      if (!known.has(c.id)) {
+        // First sighting: record who said what. The engine fills in the outcome for live comments.
+        let status = eligible.length === 0 ? "before_live" : "new";
+        if (status === "new") {
+          const done = await db.prepare("SELECT campaign_id FROM processed_comments WHERE comment_id = ?").bind(c.id).first<{ campaign_id: string }>();
+          if (done) status = done.campaign_id === "-" ? "no_keyword" : "matched";
+        }
+        await logActivity(db, {
+          kind: "comment", status, detail: evt.text, dedupe: `comment:${c.id}`, at: evt.timestamp,
+          media_id: mediaId, comment_id: c.id, igsid, username: evt.username ?? null,
+        });
+      }
       if (eligible.length === 0) continue; // older than every automation watching this post
       handled++;
       try {

@@ -3,6 +3,7 @@
 // side-effects (DMs, public actions) run idempotently via the ledgers, so re-polls and webhook
 // retries never double-message anyone.
 
+import { logActivity, type LogKind } from "../log";
 import type { InstagramClient } from "../api/client";
 import type { SendQueue } from "../queue/queue";
 import type {
@@ -151,38 +152,86 @@ export class Engine {
     for (const campaign of campaigns) {
       if (!commentTriggers(evt.text, campaign.keywords, campaign.exclude)) continue;
       matchedCampaignId = campaign.campaign_id;
+      await this.noteComment(evt, "matched", campaign.campaign_id);
 
       // Public actions are per-comment (independent toggles), guarded so re-polls don't repeat them.
       await this.runPublicActions(campaign, evt);
 
-      // Dedup DM: multiple comments from one person = exactly one opening DM per campaign.
+      // Someone who already has a funnel entry. The button flow sends one opening per person, ever.
+      // Direct delivery has no funnel to protect, so a NEW keyword comment gets the link again as
+      // a private reply to that comment — no keyword comment is left without an answer.
       const existing = await getConversation(this.db, evt.igsid, campaign.campaign_id);
-      if (existing) continue;
+      if (existing) {
+        if (campaign.direct_delivery) {
+          const ok = await this.trySend(
+            () => this.client.privateReplyText(evt.comment_id, deliveryText(campaign)),
+            "repeat_delivery",
+            `repeat:${campaign.campaign_id}:${evt.comment_id}`,
+          );
+          if (ok) await this.note(campaign, evt, "link", "sent", "sent again for a repeat comment", `dm:${evt.comment_id}`);
+          else if (!(await this.dmRefused(campaign, evt))) pendingRetry = true;
+        } else {
+          await this.note(campaign, evt, "dm", "skipped", "already messaged by this automation", `dm:${evt.comment_id}`);
+        }
+        continue;
+      }
 
       // New lead: comment_matched + opening_sent are logged only when the opening actually sends,
       // so a failed send neither inflates the funnel nor is double-counted on the retry.
       const sent = await this.sendOpening(campaign, evt);
-      if (!sent) {
-        // Instagram will never accept a private reply to this comment (the commenter's settings, a
-        // deleted comment, or one that was already answered by hand). Retrying every poll forever
-        // only burns API calls, so give up on this comment and move on.
-        if (/invalid for a private reply/i.test(this.lastSendError)) {
-          console.warn(`[dmSlayer] cannot DM @${evt.username ?? evt.igsid}: Instagram does not allow a private reply to this comment. Skipping it.`);
-        } else {
-          pendingRetry = true;
-        }
-      }
+      if (!sent && !(await this.dmRefused(campaign, evt))) pendingRetry = true;
     }
+
+    if (matchedCampaignId === "-") await this.noteComment(evt, "no_keyword", null);
 
     // Mark processed once nothing is awaiting retry, so we don't re-scan this comment every poll.
     if (!pendingRetry) await markCommentProcessed(this.db, evt.comment_id, evt.igsid, matchedCampaignId);
+  }
+
+  /**
+   * A DM send just failed. Returns true when Instagram will never accept a private reply to this
+   * comment (the commenter's settings, a deleted comment, or one already answered by hand): retrying
+   * forever only burns API calls, so the comment is answered publicly instead and not retried.
+   * Returns false for any other failure, which the caller retries on the next poll.
+   */
+  private async dmRefused(campaign: Campaign, evt: NormalizedComment): Promise<boolean> {
+    const why = this.lastSendError;
+    if (!/invalid for a private reply/i.test(why)) {
+      await this.note(campaign, evt, "dm", "failed", `${why} (will retry)`, `dm:${evt.comment_id}`);
+      return false;
+    }
+    console.warn(`[dmSlayer] cannot DM @${evt.username ?? evt.igsid}: Instagram does not allow a private reply to this comment.`);
+    await this.note(campaign, evt, "dm", "blocked", why, `dm:${evt.comment_id}`);
+    // The keyword comment still gets an answer: a public reply, unless one was already posted.
+    if (await claimCommentAction(this.db, evt.comment_id, "public_reply")) {
+      const ok = await this.trySend(() => this.client.replyToComment(evt.comment_id, DM_BLOCKED_REPLY), "fallback_reply");
+      await this.note(campaign, evt, "public_reply", ok ? "sent" : "failed", ok ? DM_BLOCKED_REPLY : this.lastSendError, `public_reply:${evt.comment_id}`);
+    }
+    return true;
+  }
+
+  /** Write one activity-log row for a comment-side event. */
+  private note(campaign: Campaign, evt: NormalizedComment, kind: LogKind, status: string, detail: string | null, dedupe: string | null): Promise<void> {
+    return logActivity(this.db, {
+      kind, status, detail, dedupe,
+      media_id: campaign.media_id, campaign_id: campaign.campaign_id,
+      comment_id: evt.comment_id, igsid: evt.igsid, username: evt.username ?? null,
+    });
+  }
+
+  private noteComment(evt: NormalizedComment, status: string, campaignId: string | null): Promise<void> {
+    return logActivity(this.db, {
+      kind: "comment", status, detail: evt.text, dedupe: `comment:${evt.comment_id}`, at: evt.timestamp,
+      media_id: evt.media_id, campaign_id: campaignId, comment_id: evt.comment_id, igsid: evt.igsid, username: evt.username ?? null,
+    });
   }
 
   private async runPublicActions(campaign: Campaign, evt: NormalizedComment): Promise<void> {
     if (campaign.public_reply?.enabled && campaign.public_reply.texts.length > 0) {
       if (await claimCommentAction(this.db, evt.comment_id, "public_reply")) {
         const text = pickRotating(campaign.public_reply.texts, evt.comment_id);
-        await this.trySend(() => this.client.replyToComment(evt.comment_id, text), "public_reply");
+        const ok = await this.trySend(() => this.client.replyToComment(evt.comment_id, text), "public_reply");
+        await this.note(campaign, evt, "public_reply", ok ? "sent" : "failed", ok ? text : this.lastSendError, `public_reply:${evt.comment_id}`);
       }
     }
     // `like_comment` is intentionally not acted on: Instagram's API has no way to like a comment
@@ -222,6 +271,7 @@ export class Engine {
     if (created) {
       await logEvent(this.db, campaign.campaign_id, "comment_matched", evt.igsid);
       await logEvent(this.db, campaign.campaign_id, "opening_sent", evt.igsid);
+      await this.note(campaign, evt, "dm", "sent", "opening message with button", `dm:${evt.comment_id}`);
     }
     return true;
   }
@@ -244,6 +294,7 @@ export class Engine {
       await logEvent(this.db, campaign.campaign_id, "comment_matched", evt.igsid);
       await logEvent(this.db, campaign.campaign_id, "opening_sent", evt.igsid);
       await logEvent(this.db, campaign.campaign_id, "delivered", evt.igsid);
+      await this.note(campaign, evt, "link", "sent", text, `dm:${evt.comment_id}`);
     }
     return true;
   }
@@ -487,6 +538,10 @@ export class Engine {
       await updateConversation(this.db, igsid, campaign.campaign_id, { state: restingState, ...opts.patch });
       if (opts.entryEvent) await logEvent(this.db, campaign.campaign_id, opts.entryEvent, igsid);
       if (extra) await logEvent(this.db, campaign.campaign_id, extra, igsid);
+      const base = { media_id: campaign.media_id, campaign_id: campaign.campaign_id, igsid };
+      const kind = opts.entryEvent ? STEP_KIND[opts.entryEvent] : undefined;
+      if (kind) await logActivity(this.db, { ...base, kind, status: "done", detail: opts.patch?.email ?? null });
+      if (extra === "delivered") await logActivity(this.db, { ...base, kind: "link", status: "sent", detail: deliveryText(campaign) });
     };
 
     switch (target) {
@@ -518,7 +573,14 @@ export class Engine {
           "delivery",
           `delivery:${campaign.campaign_id}:${igsid}`,
         );
-        if (!ok) return;
+        if (!ok) {
+          await logActivity(this.db, {
+            kind: "link", status: "failed", detail: `${this.lastSendError} (will retry)`,
+            media_id: campaign.media_id, campaign_id: campaign.campaign_id, igsid,
+            dedupe: `linkfail:${campaign.campaign_id}:${igsid}`,
+          });
+          return;
+        }
         await commit("DONE", "delivered");
         break;
       }
@@ -611,6 +673,16 @@ function deliveryText(campaign: Campaign): string {
   if (copy.includes("{reward}")) return copy.replaceAll("{reward}", reward);
   return copy.includes(reward) ? copy : `${copy.trimEnd()}\n${reward}`.trim();
 }
+
+/** Public reply used when Instagram refuses the DM, so the keyword comment is still answered. */
+const DM_BLOCKED_REPLY = "Couldn't DM you 🙏 send us a message and we'll share it right away!";
+
+/** Activity-log kind for each funnel step a person takes. */
+const STEP_KIND: Partial<Record<EventType, LogKind>> = {
+  button_clicked: "tap",
+  follow_confirmed: "follow",
+  email_captured: "email",
+};
 
 function msg(e: unknown): string {
   return e instanceof Error ? e.message : String(e);

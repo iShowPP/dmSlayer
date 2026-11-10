@@ -21,6 +21,7 @@ import { buildRuntime } from "../runtime";
 import { ensureManualAuth, manualTokenError } from "../auth/manual";
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
 import { getCommentPollError } from "../poller/commentPoll";
+import { logRows, logSummary } from "../log";
 import type { Env } from "../types";
 import { json } from "./http";
 
@@ -42,6 +43,13 @@ export async function handleApi(env: Env, req: Request, url: URL): Promise<Respo
   if (path === "/api/campaigns/status" && method === "POST") return campaignStatus(env, req);
   if (path === "/api/campaigns/archive" && method === "POST") return campaignArchive(env, req);
   if (path === "/api/campaigns/delete" && method === "POST") return campaignDelete(env, req);
+
+  // Activity logs: per-video totals, or every row for one video.
+  if (path === "/api/logs" && method === "GET") {
+    const mediaId = url.searchParams.get("media_id");
+    if (mediaId) return json({ media_id: mediaId, rows: await logRows(env.DB, mediaId) });
+    return json({ videos: await logSummary(env.DB) });
+  }
 
   // Dashboard + contacts.
   if (path === "/api/dashboard" && method === "GET") return dashboard(env, url);

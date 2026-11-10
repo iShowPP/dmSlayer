@@ -22,6 +22,8 @@ const store = {
   dash: null,
   contacts: [],
   dashDays: 30,
+  logMedia: null,
+  logCat: "people",
   dashCampaign: "",
   contactsCampaign: "",
   automationsSearch: "",
@@ -158,6 +160,7 @@ function renderApp() {
           <button class="nav-item" data-page="dashboard">${ICON.dashboard}<span>Dashboard</span></button>
           <button class="nav-item" data-page="automations">${ICON.automations}<span>Automations</span></button>
           <button class="nav-item" data-page="create">${ICON.create}<span>Create</span></button>
+          <button class="nav-item" data-page="logs">${ICON.inbox}<span>Logs</span></button>
           <button class="nav-item" data-page="contacts">${ICON.contacts}<span>Contacts</span></button>
           <button class="nav-item" data-page="archive">${ICON.archive}<span>Archive</span></button>
         </nav>
@@ -232,6 +235,7 @@ function route() {
   if (store.page === "automations") renderAutomations();
   else if (store.page === "create") renderCreate();
   else if (store.page === "dashboard") renderDashboard();
+  else if (store.page === "logs") renderLogs();
   else if (store.page === "contacts") renderContacts();
   else if (store.page === "archive") renderArchive();
 }
@@ -1272,6 +1276,170 @@ function scheduleDashRefresh() {
     if (store.page !== "dashboard" || !store.token) return;
     renderDashboard(true);
   }, 5000);
+}
+
+/* ================= LOGS ================= */
+/* Per-video activity log. Index of videos, then one video broken into categories: a per-person
+   matrix (who commented, got a public reply, got a DM, tapped, got the link) and the raw rows. */
+const LOG_CATS = [
+  ["people", "PEOPLE"],
+  ["comment", "COMMENTS"],
+  ["public_reply", "REPLIES"],
+  ["dm", "DMS"],
+  ["tap", "TAPS"],
+  ["link", "LINKS"],
+  ["failed", "FAILED"],
+  ["all", "ALL"],
+];
+const LOG_KIND = { comment: "COMMENT", public_reply: "REPLY", dm: "DM", tap: "TAP", follow: "FOLLOW", email: "EMAIL", link: "LINK" };
+const LOG_STATUS = {
+  matched: "KEYWORD", no_keyword: "NO KEYWORD", before_live: "BEFORE LIVE", new: "PENDING",
+  sent: "SENT", failed: "FAILED", blocked: "BLOCKED", skipped: "SKIPPED", done: "DONE",
+};
+let logsTimer = null;
+let logsHtml = "";
+
+const stamp = (ts) => {
+  const d = new Date(ts * 1000);
+  return `${pad2(d.getDate())} ${d.toLocaleDateString("en-US", { month: "short" })} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+};
+const isFail = (r) => r.status === "failed" || r.status === "blocked";
+
+function mediaLabel(id) {
+  const m = store.media.find((x) => x.id === id);
+  const cap = m && m.caption ? m.caption.replace(/\s+/g, " ").trim() : "";
+  return cap ? cap.slice(0, 60) : "POST " + id;
+}
+
+/** One line per person for a video, built from its log rows. */
+function logPeople(rows) {
+  const by = new Map();
+  for (const r of [...rows].reverse()) {
+    const key = r.igsid || r.comment_id || "?";
+    let p = by.get(key);
+    if (!p) by.set(key, (p = { username: null, comments: [], keyword: false, before: false, reply: "-", dm: "-", tap: "-", link: "-", note: "", last: 0 }));
+    if (r.username) p.username = r.username;
+    p.last = Math.max(p.last, r.at);
+    if (r.kind === "comment") {
+      p.comments.push(r.detail || "");
+      if (r.status === "matched") p.keyword = true;
+      if (r.status === "before_live") p.before = true;
+    } else if (r.kind === "public_reply") p.reply = LOG_STATUS[r.status] || r.status;
+    else if (r.kind === "dm") p.dm = LOG_STATUS[r.status] || r.status;
+    else if (r.kind === "tap") p.tap = "YES";
+    else if (r.kind === "link") p.link = LOG_STATUS[r.status] || r.status;
+    if (isFail(r)) p.note = r.detail || "";
+  }
+  return [...by.values()].sort((a, b) => b.last - a.last);
+}
+
+function logsCsv(rows) {
+  const q = (v) => {
+    const s = String(v ?? "");
+    const safe = /^[=+\-@]/.test(s) ? "'" + s : s;
+    return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  };
+  const head = ["time", "username", "kind", "status", "detail", "attempts", "comment_id", "automation"];
+  const lines = [head.join(",")];
+  for (const r of rows) lines.push([new Date(r.at * 1000).toISOString(), r.username, r.kind, r.status, r.detail, r.n, r.comment_id, r.campaign_id].map(q).join(","));
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
+  a.download = `dmslayer-log-${store.logMedia}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+
+async function renderLogs(silent = false) {
+  const view = $("#view");
+  clearTimeout(logsTimer);
+  if (!silent) logsHtml = "";
+  let html = "";
+  let rows = [];
+  try {
+    if (store.media.length === 0 && (store.status || {}).connected) {
+      store.media = ((await api("/api/media").catch(() => ({ media: [] }))).media) || [];
+    }
+    if (!store.logMedia) {
+      // ---- index: one row per video ----
+      const vids = (await api("/api/logs")).videos || [];
+      const list = vids.length
+        ? vids
+            .map(
+              (v, i) => `<button class="ix" data-media="${esc(v.media_id)}"><span class="dim">${pad2(i + 1)}</span><span class="bright ix-name">${esc(mediaLabel(v.media_id))}</span><span class="dim">${fmt(v.comments)} CMT / ${fmt(v.replies)} RPL / ${fmt(v.dms)} DM / ${fmt(v.links)} LNK / ${fmt(v.failed)} FAIL / ${ageShort(v.last_at)}</span><span class="dim">&gt;</span></button>`,
+            )
+            .join("")
+        : `<div class="ix-empty dim">NO ACTIVITY LOGGED YET</div>`;
+      html = `<div class="panel-root"><div class="panels"><div class="panel wide">
+        ${secHead(1, "LOGS BY VIDEO", pad2(vids.length) + " VIDEOS")}<div class="ixl">${list}</div></div></div></div>`;
+    } else {
+      // ---- one video ----
+      rows = (await api("/api/logs?media_id=" + encodeURIComponent(store.logMedia))).rows || [];
+      const cat = store.logCat || "people";
+      const count = (f) => rows.filter(f).length;
+      const people = logPeople(rows);
+      const totals = [
+        ["COMMENTS", count((r) => r.kind === "comment")],
+        ["KEYWORD", count((r) => r.kind === "comment" && r.status === "matched")],
+        ["REPLIES", count((r) => r.kind === "public_reply" && r.status === "sent")],
+        ["DMS", count((r) => (r.kind === "dm" || r.kind === "link") && r.status === "sent")],
+        ["TAPS", count((r) => r.kind === "tap")],
+        ["FAILED", count(isFail)],
+      ];
+      const m = store.media.find((x) => x.id === store.logMedia);
+      let body;
+      if (cat === "people") {
+        body =
+          `<div class="lg lg-people lg-head dim"><span>USER</span><span>COMMENT</span><span>KEYWORD</span><span>REPLY</span><span>DM</span><span>TAP</span><span>LINK</span><span>LAST</span></div>` +
+          (people.length
+            ? people
+                .map(
+                  (p) => `<div class="lg lg-people"><span class="bright">${p.username ? "@" + esc(p.username) : "UNKNOWN"}</span><span class="mid raw" title="${esc(p.comments.join(" | "))}">${esc(p.comments[p.comments.length - 1] || "-")}${p.comments.length > 1 ? ` <span class="dim">+${p.comments.length - 1}</span>` : ""}</span><span class="${p.keyword ? "bright" : "dim"}">${p.keyword ? "YES" : p.before ? "OLD" : "NO"}</span><span class="${p.reply === "SENT" ? "bright" : "dim"}">${p.reply}</span><span class="${p.dm === "SENT" ? "bright" : "dim"}">${p.dm}</span><span class="${p.tap === "YES" ? "bright" : "dim"}">${p.tap}</span><span class="${p.link === "SENT" ? "bright" : "dim"}">${p.link}</span><span class="dim">${ageShort(p.last)}</span>${p.note ? `<span class="lg-note mid raw">${esc(p.note)}</span>` : ""}</div>`,
+                )
+                .join("")
+            : `<div class="ix-empty dim">NOTHING HERE</div>`);
+      } else {
+        const sel = rows.filter((r) => (cat === "all" ? true : cat === "failed" ? isFail(r) : r.kind === cat));
+        body =
+          `<div class="lg lg-rows lg-head dim"><span>TIME</span><span>USER</span><span>EVENT</span><span>STATUS</span><span>DETAIL</span></div>` +
+          (sel.length
+            ? sel
+                .map(
+                  (r) => `<div class="lg lg-rows"><span class="dim">${stamp(r.at)}</span><span class="bright">${r.username ? "@" + esc(r.username) : "UNKNOWN"}</span><span class="mid">${LOG_KIND[r.kind] || esc(r.kind)}</span><span class="${isFail(r) || r.status === "sent" || r.status === "matched" ? "bright" : "dim"}">${LOG_STATUS[r.status] || esc(r.status)}${r.n > 1 ? " X" + r.n : ""}</span><span class="mid raw">${esc(r.detail || "-")}</span></div>`,
+                )
+                .join("")
+            : `<div class="ix-empty dim">NOTHING HERE</div>`);
+      }
+      html = `<div class="panel-root"><div class="panels">
+        <div class="panel wide">
+          ${secHead(1, "VIDEO", (m && m.media_type) || "POST")}
+          <div class="mid raw">${esc(mediaLabel(store.logMedia))}</div>
+          ${pairs(totals.slice(0, 3).map(([k, v]) => [k, fmt(v)]))}
+          ${pairs(totals.slice(3).map(([k, v]) => [k, fmt(v)]))}
+          ${secHead(2, "CATEGORY", (LOG_CATS.find((c) => c[0] === cat) || ["", ""])[1])}
+          <div class="keys">${LOG_CATS.map(([id, label]) => `<button class="key${id === cat ? " on" : ""}" data-cat="${id}">${label}</button>`).join("")}</div>
+          <div class="keys" style="margin-top:6px"><button class="key" data-back="1">&lt; ALL VIDEOS</button><button class="key" data-csv="1">EXPORT CSV</button>${m && m.permalink ? `<a class="key" href="${esc(m.permalink)}" target="_blank" rel="noopener">OPEN ON INSTAGRAM</a>` : ""}</div>
+          ${secHead(3, cat === "people" ? "WHO GOT WHAT" : "ENTRIES", pad2(cat === "people" ? people.length : 0) + (cat === "people" ? " PEOPLE" : ""))}
+          <div class="lgl">${body}</div>
+        </div></div></div>`;
+    }
+  } catch (e) {
+    if (!silent) view.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    return;
+  }
+  if (store.page !== "logs") return;
+  if (html !== logsHtml) {
+    logsHtml = html;
+    view.innerHTML = html;
+    view.querySelectorAll("[data-media]").forEach((b) => (b.onclick = () => { store.logMedia = b.dataset.media; store.logCat = "people"; renderLogs(); }));
+    view.querySelectorAll("[data-cat]").forEach((b) => (b.onclick = () => { store.logCat = b.dataset.cat; renderLogs(true); }));
+    const back = view.querySelector("[data-back]");
+    if (back) back.onclick = () => { store.logMedia = null; renderLogs(); };
+    const csvBtn = view.querySelector("[data-csv]");
+    if (csvBtn) csvBtn.onclick = () => logsCsv(rows);
+  }
+  logsTimer = setTimeout(() => store.page === "logs" && store.token && renderLogs(true), 5000);
 }
 
 /* ================= CONTACTS ================= */
