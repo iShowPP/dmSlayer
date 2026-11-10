@@ -245,6 +245,11 @@ export class InstagramClient {
     return this.sendButtonTemplate({ commentId }, text, buttons);
   }
 
+  /** Private reply to a comment with plain text — the whole funnel in one message. */
+  privateReplyText(commentId: string, text: string): Promise<{ message_id?: string }> {
+    return this.sendMessage({ recipient: { comment_id: commentId }, message: { text } });
+  }
+
   // ---- public comment actions ----
 
   /** Post a public reply under a comment (text only; publishes asynchronously). */

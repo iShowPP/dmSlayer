@@ -546,6 +546,7 @@ function defaultDraft() {
     opening_enabled: true,
     check_follow: false,
     ask_email: false,
+    direct_delivery: true,
     reward: { type: "link", value: "" },
     copy: {
       opening: "Hey! Tap below to grab the link 👇",
@@ -571,6 +572,7 @@ function draftFromCampaign(c) {
     opening_enabled: true,
     check_follow: !!c.check_follow,
     ask_email: !!c.ask_email,
+    direct_delivery: !!c.direct_delivery,
     reward: c.reward || { type: "link", value: "" },
     copy: Object.assign(defaultDraft().copy, c.copy || {}),
     active: !!c.active,
@@ -720,6 +722,8 @@ function renderSections() {
 
     <div class="card">
       <h3><span class="section-num">3</span>They will get</h3>
+      <div class="toggle-row"><div><div class="tr-title">Send the link straight away</div><div class="tr-sub">One DM with your delivery message and link, no button to tap. Most reliable; turn off to use the button, follow and email steps below.</div></div>
+        <label class="switch"><input type="checkbox" id="direct_delivery" ${d.direct_delivery ? "checked" : ""}/><span class="slider"></span></label></div>
       <div class="toggle-row"><div><div class="tr-title">An opening DM</div><div class="tr-sub">Sent as a private reply with a button so it survives the Requests folder. Required to start the funnel.</div></div>
         <label class="switch"><input type="checkbox" id="opening_enabled" ${d.opening_enabled ? "checked" : ""}/><span class="slider"></span></label></div>
       <div id="opening_wrap" style="${d.opening_enabled ? "" : "display:none"}">
@@ -807,6 +811,7 @@ function wireSections() {
   };
   bindToggle("pr_enabled", (v) => (d.public_reply.enabled = v), "pr_texts_wrap");
   bindToggle("opening_enabled", (v) => (d.opening_enabled = v), "opening_wrap");
+  bindToggle("direct_delivery", (v) => (d.direct_delivery = v));
   bindToggle("check_follow", (v) => (d.check_follow = v), "follow_wrap");
   bindToggle("ask_email", (v) => (d.ask_email = v), "email_wrap");
 }
@@ -875,6 +880,10 @@ function renderPreview() {
     // DM funnel — a two-sided conversation: business messages on the left, the follower's taps
     // echoed back on the right at every step, so the preview reads as "this is what they'd see."
     const blocks = [];
+    if (d.direct_delivery) {
+      const shown = (d.copy.delivery || "").includes("{reward}") ? deliveryText : `${d.copy.delivery || ""}\n${reward}`;
+      body = `<div class="ig"><div class="dm"><div class="bubble in" style="white-space:pre-wrap">${esc(shown)}</div><div class="dm-note">sent as one message when they comment</div></div></div>`;
+    } else {
     if (d.opening_enabled) {
       blocks.push(`<div class="bubble in">${esc(d.copy.opening)}</div>`);
       blocks.push(`<div class="dm-btn">${esc(d.copy.opening_button || "Continue")}</div>`);
@@ -896,6 +905,7 @@ function renderPreview() {
     }
     blocks.push(`<div class="bubble in">${esc(deliveryText)}</div>`);
     body = `<div class="ig"><div class="dm">${blocks.join("")}</div></div>`;
+    }
   }
 
   col.innerHTML = `
@@ -986,6 +996,7 @@ function buildCampaignFromDraft() {
     public_reply: d.public_reply.enabled ? { enabled: true, texts: d.public_reply.texts } : { enabled: false, texts: d.public_reply.texts },
     check_follow: d.check_follow,
     ask_email: d.ask_email,
+    direct_delivery: d.direct_delivery,
     reward: d.reward,
     copy: d.copy,
   };

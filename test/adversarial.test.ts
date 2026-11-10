@@ -285,14 +285,12 @@ describe("malformed and adversarial config", () => {
     expect(client.calls.privateReply).toHaveLength(0);
   });
 
-  it("DEFECT: a delivery message with no {reward} silently sends no link", async () => {
+  it("a delivery message with no {reward} still carries the link (appended)", async () => {
     await upsertCampaign(db, campaign({ copy: { ...campaign().copy, delivery: "thanks for watching!" } }), true);
     await engine.handleComment(comment());
     await engine.handleMessage(tap({ timestamp: T + 10 }));
     const sent = client.calls.text[0] as { text: string };
-    expect(sent.text).toBe("thanks for watching!");
-    expect(sent.text).not.toContain("x.com/g");
-    // Marked delivered, funnel counted as converted, person never received the reward.
+    expect(sent.text).toBe("thanks for watching!\nhttps://x.com/g");
     expect((await getConversation(db, "u1", "c1"))?.state).toBe("DONE");
   });
 

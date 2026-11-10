@@ -187,6 +187,7 @@ export class Engine {
    * (so the caller leaves the comment unprocessed for a retry on the next poll).
    */
   private async sendOpening(campaign: Campaign, evt: NormalizedComment): Promise<boolean> {
+    if (campaign.direct_delivery) return this.sendDirect(campaign, evt);
     const button = {
       type: "postback" as const,
       title: buttonTitle(campaign.copy.opening_button, "Continue"),
@@ -216,6 +217,27 @@ export class Engine {
     return true;
   }
 
+
+  /**
+   * Direct delivery: the reward goes out as the private reply itself, and the funnel is finished in
+   * one step. Same per-person claim key as the opening, so nobody is ever messaged twice.
+   */
+  private async sendDirect(campaign: Campaign, evt: NormalizedComment): Promise<boolean> {
+    const text = deliveryText(campaign);
+    const ok = await this.trySend(
+      () => this.client.privateReplyText(evt.comment_id, text),
+      "direct_delivery",
+      `opening:${campaign.campaign_id}:${evt.igsid}`,
+    );
+    if (!ok) return false;
+    const created = await createConversation(this.db, evt.igsid, campaign.campaign_id, evt.username ?? null, "DONE");
+    if (created) {
+      await logEvent(this.db, campaign.campaign_id, "comment_matched", evt.igsid);
+      await logEvent(this.db, campaign.campaign_id, "opening_sent", evt.igsid);
+      await logEvent(this.db, campaign.campaign_id, "delivered", evt.igsid);
+    }
+    return true;
+  }
 
   // ---- messages ----
 
@@ -481,7 +503,7 @@ export class Engine {
         break;
       }
       case "DELIVER": {
-        const text = campaign.copy.delivery.replaceAll("{reward}", campaign.reward.value);
+        const text = deliveryText(campaign);
         const ok = await this.trySend(
           () => this.client.sendText(igsid, text),
           "delivery",
@@ -563,6 +585,17 @@ export class Engine {
       return claimKey ? true : false;
     }
   }
+}
+
+/**
+ * The delivery message with the reward filled in. If the copy has no {reward} placeholder the
+ * reward is appended, so a rewritten message can never silently drop the link.
+ */
+function deliveryText(campaign: Campaign): string {
+  const copy = campaign.copy.delivery ?? "";
+  const reward = campaign.reward.value;
+  if (copy.includes("{reward}")) return copy.replaceAll("{reward}", reward);
+  return copy.includes(reward) ? copy : `${copy.trimEnd()}\n${reward}`.trim();
 }
 
 function msg(e: unknown): string {

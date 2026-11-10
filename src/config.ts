@@ -67,6 +67,7 @@ export function validateCampaign(input: unknown, index = 0): Campaign {
     check_follow: Boolean(c.check_follow),
     verify_follow_count: Boolean(c.verify_follow_count),
     ask_email: Boolean(c.ask_email),
+    direct_delivery: Boolean(c.direct_delivery),
     reward: { type: reward.type as Campaign["reward"]["type"], value: reward.value as string },
     // `copy` used to be cast wholesale, which meant a non-string optional field (from
     // /config/import, or a row written straight into the campaigns table) reached the send path

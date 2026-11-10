@@ -83,6 +83,12 @@ export interface Campaign {
    *  Accepted for backwards compatibility so older saved campaigns keep loading; ignored. */
   verify_follow_count?: boolean;
   ask_email?: boolean;
+  /**
+   * Send the reward in the very first DM (the private reply to the comment) instead of an opening
+   * button followed by a second message. One message, no tap. Needed on accounts where Meta refuses
+   * follow-up sends ("not the thread owner") because another tool is also connected.
+   */
+  direct_delivery?: boolean;
   reward: RewardConfig;
   copy: CampaignCopy;
 }
