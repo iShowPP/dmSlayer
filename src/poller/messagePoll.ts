@@ -103,6 +103,16 @@ export async function pollMessages(rt: Runtime, db: D1Database): Promise<void> {
   }
 }
 
+/**
+ * Mark the message poll as up to date without calling Instagram. Used when no live automation
+ * waits for replies (all of them deliver in the first DM), which halves the API calls per tick and
+ * lets the comment check run more often. Keeps the dashboard's health signal fresh.
+ */
+export async function markMessagePollIdle(db: D1Database): Promise<void> {
+  await kvSet(db, CURSOR_KEY, String(now()));
+  await clearPollError(db);
+}
+
 /** Record why the last poll was unhealthy, so /auth/status can surface it instead of failing mute. */
 async function recordPollError(db: D1Database, message: string): Promise<void> {
   await kvSet(db, ERROR_KEY, JSON.stringify({ at: now(), message: message.slice(0, 300) }));

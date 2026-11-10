@@ -10,6 +10,9 @@ export interface Env {
   GRAPH_VERSION: string;
   MODE: "polling" | "webhook";
   POLL_INTERVAL_SECONDS: string;
+  /** Lowest poll interval allowed (default 30). Cloudflare's cron fires once a minute, so this only
+   *  matters when something ticks faster — the local runner sets it to poll every few seconds. */
+  POLL_FLOOR_SECONDS?: string;
   /** Webhook mode only: seconds between slow reconciliation polls that catch missed webhook
    *  deliveries. "off" or 0 disables them (pure push). Defaults to 900. */
   WEBHOOK_RECONCILE_SECONDS?: string;

@@ -61,7 +61,8 @@ const DEFAULT_RECONCILE_SECONDS = 900; // 15 min
  */
 export function pollIntervalSeconds(env: Env): number | null {
   if (env.MODE !== "webhook") {
-    return Math.max(MIN_POLL_SECONDS, Number(env.POLL_INTERVAL_SECONDS) || DEFAULT_POLL_SECONDS);
+    const floor = Math.max(5, Number(env.POLL_FLOOR_SECONDS) || MIN_POLL_SECONDS);
+    return Math.max(floor, Number(env.POLL_INTERVAL_SECONDS) || DEFAULT_POLL_SECONDS);
   }
   const raw = (env.WEBHOOK_RECONCILE_SECONDS ?? "").trim().toLowerCase();
   if (raw === "off" || raw === "0" || raw === "false") return null;

@@ -46,6 +46,10 @@ if (!existsSync(varsPath)) {
       `OWNER_TOKEN=${randomBytes(24).toString("hex")}`,
       `WEBHOOK_VERIFY_TOKEN=${randomBytes(16).toString("hex")}`,
       "",
+      "# How often to check Instagram for new comments, in seconds (minimum 5).",
+      "POLL_INTERVAL_SECONDS=10",
+      "POLL_FLOOR_SECONDS=10",
+      "",
       "# Where Instagram sends you back after login. Register this exact URL in your Meta app.",
       `REDIRECT_URI=https://lvh.me:${PORT}/auth/callback`,
       "",
@@ -125,15 +129,23 @@ if (await waitUntilUp()) {
   }
   console.log("────────────────────────────────────────────────────────────\n");
 
+  // Tick often; the app itself decides whether a check is due (POLL_INTERVAL_SECONDS in .dev.vars).
   let lastRefresh = 0;
+  let busy = false;
   const tick = async () => {
-    await fireCron("* * * * *");
-    if (Date.now() - lastRefresh > 24 * 3600 * 1000) {
-      if (await fireCron("0 3 * * *")) lastRefresh = Date.now();
+    if (busy) return; // the previous check is still sending
+    busy = true;
+    try {
+      await fireCron("* * * * *");
+      if (Date.now() - lastRefresh > 24 * 3600 * 1000) {
+        if (await fireCron("0 3 * * *")) lastRefresh = Date.now();
+      }
+    } finally {
+      busy = false;
     }
   };
   tick();
-  setInterval(tick, 60_000);
+  setInterval(tick, 3_000);
 } else {
   console.error("The app did not start. Check the messages above.");
   stop();

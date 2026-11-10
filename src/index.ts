@@ -5,9 +5,9 @@
 import type { Env } from "./types";
 import { buildRuntime, pollIntervalSeconds } from "./runtime";
 import { pollComments } from "./poller/commentPoll";
-import { pollMessages } from "./poller/messagePoll";
+import { markMessagePollIdle, pollMessages } from "./poller/messagePoll";
 import { refreshTokenIfDue } from "./auth/refresh";
-import { claimPollSlot } from "./db";
+import { claimPollSlot, getActiveCampaigns } from "./db";
 import { handleAuthorize, handleCallback, handleDisconnect, handleStatus } from "./routes/auth";
 import { handleConfigExport, handleConfigImport } from "./routes/config";
 import { handleWebhookAdmin, handleWebhookEvent, handleWebhookVerify } from "./routes/webhook";
@@ -116,7 +116,10 @@ async function runPoll(env: Env, interval: number): Promise<void> {
     console.warn(`[dmSlayer] pollComments failed: ${e instanceof Error ? e.message : e}`);
   }
   try {
-    await pollMessages(rt, env.DB);
+    // Replies only matter to automations that use the button / follow / email steps.
+    const needsReplies = (await getActiveCampaigns(env.DB)).some((c) => !c.direct_delivery);
+    if (needsReplies) await pollMessages(rt, env.DB);
+    else await markMessagePollIdle(env.DB);
   } catch (e) {
     console.warn(`[dmSlayer] pollMessages failed: ${e instanceof Error ? e.message : e}`);
   }
