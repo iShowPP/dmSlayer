@@ -1083,6 +1083,15 @@ function pairs(list) {
   return `<div class="pairs">${list.map(([k, v]) => `<span><span class="dim">${esc(k)}</span> <span class="mid">${esc(v)}</span></span>`).join("")}</div>`;
 }
 
+/** Followers and posts change slowly; ask Instagram at most once a minute. */
+let acctCache = { at: 0, data: { available: false } };
+async function accountCached() {
+  if (Date.now() - acctCache.at < 60000) return acctCache.data;
+  const data = await api("/api/account").catch(() => ({ available: false }));
+  acctCache = { at: Date.now(), data };
+  return data;
+}
+
 async function renderDashboard(silent = false) {
   const view = $("#view");
   clearTimeout(dashTimer);
@@ -1097,7 +1106,7 @@ async function renderDashboard(silent = false) {
       api("/api/status"),
       api("/api/campaigns").catch(() => ({ campaigns: store.campaigns })),
       api("/api/dashboard?" + qs.toString()),
-      api("/api/account").catch(() => ({ available: false })),
+      accountCached(),
     ]);
     store.status = st;
     store.campaigns = camps.campaigns || [];

@@ -20,9 +20,47 @@ export function matchesKeyword(text: string, keyword: string): boolean {
   return re.test(text);
 }
 
-/** True if any keyword matches (whole-word). */
+/** Edit distance between two strings is at most one (one letter added, dropped or swapped out). */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+  const [long, short] = a.length > b.length ? [a, b] : [b, a];
+  return long.slice(i + 1) === short.slice(i);
+}
+
+/**
+ * Forgiving trigger match, for how people actually type a keyword in comments:
+ *   - spaced or hyphenated: "Tik tok", "tik-tok" for the keyword "tiktok" (and "tier1" for "tier 1")
+ *   - one typo, for keywords of six or more letters: "Tiltok", "tiktoks"
+ * Still whole words only: adjacent words are joined and compared, never searched as a substring,
+ * so "ai" does not fire inside "fair". Keywords under four letters, or containing punctuation
+ * (e.g. "node.js"), keep the exact rule.
+ */
+export function matchesKeywordLoose(text: string, keyword: string): boolean {
+  if (matchesKeyword(text, keyword)) return true;
+  const kw = keyword.trim().toLowerCase();
+  if (/[^\p{L}\p{N}\s]/u.test(kw)) return false;
+  const k = kw.replace(/\s+/g, "");
+  if (k.length < 4) return false;
+  const words = text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  for (let i = 0; i < words.length; i++) {
+    let joined = "";
+    for (let j = i; j < words.length && j < i + 4; j++) {
+      joined += words[j];
+      if (joined.length > k.length + 1) break;
+      if (joined === k) return true;
+      if (k.length >= 6 && withinOneEdit(joined, k)) return true;
+    }
+  }
+  return false;
+}
+
+/** True if any keyword matches (whole words; forgiving about spacing and a single typo). */
 export function matchesAnyKeyword(text: string, keywords: string[]): boolean {
-  return keywords.some((k) => matchesKeyword(text, k));
+  return keywords.some((k) => matchesKeywordLoose(text, k));
 }
 
 /** True if any excluded word is present (same whole-word rule); any match cancels the trigger. */

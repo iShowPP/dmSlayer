@@ -44,6 +44,24 @@ describe("whole-word keyword matching (Acceptance: 'ai' fires on 'this ai' not '
   });
 });
 
+describe("forgiving trigger match (how people really type keywords)", () => {
+  it("accepts a keyword typed with a space or hyphen", () => {
+    expect(matchesAnyKeyword("Tik tok", ["tiktok"])).toBe(true);
+    expect(matchesAnyKeyword("tik-tok please", ["tiktok"])).toBe(true);
+    expect(matchesAnyKeyword("tier1", ["tier 1"])).toBe(true);
+  });
+  it("accepts a single typo on longer keywords", () => {
+    expect(matchesAnyKeyword("Tiltok", ["tiktok"])).toBe(true);
+    expect(matchesAnyKeyword("tiktoks", ["tiktok"])).toBe(true);
+  });
+  it("stays strict for short keywords, substrings and unrelated words", () => {
+    expect(matchesAnyKeyword("that's not fair", ["ai"])).toBe(false);
+    expect(matchesAnyKeyword("blinking lights", ["link"])).toBe(false);
+    expect(matchesAnyKeyword("nice video bro", ["tiktok"])).toBe(false);
+    expect(matchesAnyKeyword("nodexjs is not a thing", ["node.js"])).toBe(false);
+  });
+});
+
 describe("exclude words + trigger composition", () => {
   it("an excluded word cancels the trigger (same whole-word rule)", () => {
     expect(hasExcludedWord("this is a scam", ["scam"])).toBe(true);

@@ -47,8 +47,8 @@ if (!existsSync(varsPath)) {
       `WEBHOOK_VERIFY_TOKEN=${randomBytes(16).toString("hex")}`,
       "",
       "# How often to check Instagram for new comments, in seconds (minimum 5).",
-      "POLL_INTERVAL_SECONDS=10",
-      "POLL_FLOOR_SECONDS=10",
+      "POLL_INTERVAL_SECONDS=5",
+      "POLL_FLOOR_SECONDS=5",
       "",
       "# Where Instagram sends you back after login. Register this exact URL in your Meta app.",
       `REDIRECT_URI=https://lvh.me:${PORT}/auth/callback`,
@@ -145,7 +145,7 @@ if (await waitUntilUp()) {
     }
   };
   tick();
-  setInterval(tick, 3_000);
+  setInterval(tick, 2_000);
 } else {
   console.error("The app did not start. Check the messages above.");
   stop();

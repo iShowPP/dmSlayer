@@ -162,7 +162,16 @@ export class Engine {
       // New lead: comment_matched + opening_sent are logged only when the opening actually sends,
       // so a failed send neither inflates the funnel nor is double-counted on the retry.
       const sent = await this.sendOpening(campaign, evt);
-      if (!sent) pendingRetry = true;
+      if (!sent) {
+        // Instagram will never accept a private reply to this comment (the commenter's settings, a
+        // deleted comment, or one that was already answered by hand). Retrying every poll forever
+        // only burns API calls, so give up on this comment and move on.
+        if (/invalid for a private reply/i.test(this.lastSendError)) {
+          console.warn(`[dmSlayer] cannot DM @${evt.username ?? evt.igsid}: Instagram does not allow a private reply to this comment. Skipping it.`);
+        } else {
+          pendingRetry = true;
+        }
+      }
     }
 
     // Mark processed once nothing is awaiting retry, so we don't re-scan this comment every poll.
@@ -560,7 +569,11 @@ export class Engine {
    * The trade is deliberate: at-most-once delivery. A genuinely lost message leaves that person
    * where they were instead of being messaged again.
    */
+  /** Why the most recent failed send was refused ("" after a success). */
+  private lastSendError = "";
+
   private async trySend<T>(fn: () => Promise<T>, label: string, key?: string): Promise<boolean> {
+    this.lastSendError = "";
     const claimKey = key ?? null;
     if (claimKey && !(await claimSend(this.db, claimKey))) {
       console.warn(`[dmSlayer] skipping ${label}: already attempted, may have delivered (${claimKey})`);
@@ -574,6 +587,7 @@ export class Engine {
       // and was refused, so nothing went out. Anything else (fetch threw, timeout, socket closed)
       // means we never learned the outcome, and the message may already be in the person's inbox.
       const rejected = e instanceof InstagramApiError;
+      this.lastSendError = msg(e);
       if (rejected) {
         if (claimKey) await releaseSend(this.db, claimKey);
         console.warn(`[dmSlayer] send failed (${label}), will retry: ${msg(e)}`);
