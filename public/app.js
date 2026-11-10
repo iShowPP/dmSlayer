@@ -1311,17 +1311,30 @@ function mediaLabel(id) {
   return cap ? cap.slice(0, 60) : "POST " + id;
 }
 
+/** Comment id -> its number on this video, counted in the order comments were posted (oldest = 1). */
+function commentNumbers(rows) {
+  const nums = new Map();
+  rows
+    .filter((r) => r.kind === "comment" && r.comment_id)
+    .sort((a, b) => a.at - b.at || a.id - b.id)
+    .forEach((r, i) => nums.set(r.comment_id, i + 1));
+  return nums;
+}
+const num3 = (n) => (n ? "#" + String(n).padStart(3, "0") : "-");
+
 /** One line per person for a video, built from its log rows. */
 function logPeople(rows) {
+  const nums = commentNumbers(rows);
   const by = new Map();
   for (const r of [...rows].reverse()) {
     const key = r.igsid || r.comment_id || "?";
     let p = by.get(key);
-    if (!p) by.set(key, (p = { username: null, comments: [], keyword: false, before: false, reply: "-", dm: "-", tap: "-", link: "-", note: "", last: 0 }));
+    if (!p) by.set(key, (p = { username: null, nums: [], comments: [], keyword: false, before: false, reply: "-", dm: "-", tap: "-", link: "-", note: "", last: 0 }));
     if (r.username) p.username = r.username;
     p.last = Math.max(p.last, r.at);
     if (r.kind === "comment") {
       p.comments.push(r.detail || "");
+      if (nums.has(r.comment_id)) p.nums.push(nums.get(r.comment_id));
       if (r.status === "matched") p.keyword = true;
       if (r.status === "before_live") p.before = true;
     } else if (r.kind === "public_reply") p.reply = LOG_STATUS[r.status] || r.status;
@@ -1339,9 +1352,10 @@ function logsCsv(rows) {
     const safe = /^[=+\-@]/.test(s) ? "'" + s : s;
     return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
   };
-  const head = ["time", "username", "kind", "status", "detail", "attempts", "comment_id", "automation"];
+  const nums = commentNumbers(rows);
+  const head = ["comment_no", "time", "username", "kind", "status", "detail", "attempts", "comment_id", "automation"];
   const lines = [head.join(",")];
-  for (const r of rows) lines.push([new Date(r.at * 1000).toISOString(), r.username, r.kind, r.status, r.detail, r.n, r.comment_id, r.campaign_id].map(q).join(","));
+  for (const r of rows) lines.push([nums.get(r.comment_id) || "", new Date(r.at * 1000).toISOString(), r.username, r.kind, r.status, r.detail, r.n, r.comment_id, r.campaign_id].map(q).join(","));
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([lines.join("\n")], { type: "text/csv" }));
   a.download = `dmslayer-log-${store.logMedia}.csv`;
@@ -1391,22 +1405,23 @@ async function renderLogs(silent = false) {
       let body;
       if (cat === "people") {
         body =
-          `<div class="lg lg-people lg-head dim"><span>USER</span><span>COMMENT</span><span>KEYWORD</span><span>REPLY</span><span>DM</span><span>TAP</span><span>LINK</span><span>LAST</span></div>` +
+          `<div class="lg lg-people lg-head dim"><span>NO</span><span>USER</span><span>COMMENT</span><span>KEYWORD</span><span>REPLY</span><span>DM</span><span>TAP</span><span>LINK</span><span>LAST</span></div>` +
           (people.length
             ? people
                 .map(
-                  (p) => `<div class="lg lg-people"><span class="bright">${p.username ? "@" + esc(p.username) : "UNKNOWN"}</span><span class="mid raw" title="${esc(p.comments.join(" | "))}">${esc(p.comments[p.comments.length - 1] || "-")}${p.comments.length > 1 ? ` <span class="dim">+${p.comments.length - 1}</span>` : ""}</span><span class="${p.keyword ? "bright" : "dim"}">${p.keyword ? "YES" : p.before ? "OLD" : "NO"}</span><span class="${p.reply === "SENT" ? "bright" : "dim"}">${p.reply}</span><span class="${p.dm === "SENT" ? "bright" : "dim"}">${p.dm}</span><span class="${p.tap === "YES" ? "bright" : "dim"}">${p.tap}</span><span class="${p.link === "SENT" ? "bright" : "dim"}">${p.link}</span><span class="dim">${ageShort(p.last)}</span>${p.note ? `<span class="lg-note mid raw">${esc(p.note)}</span>` : ""}</div>`,
+                  (p) => `<div class="lg lg-people"><span class="dim" title="${esc(p.nums.map(num3).join(" "))}">${num3(p.nums[p.nums.length - 1])}</span><span class="bright">${p.username ? "@" + esc(p.username) : "UNKNOWN"}</span><span class="mid raw" title="${esc(p.comments.join(" | "))}">${esc(p.comments[p.comments.length - 1] || "-")}${p.comments.length > 1 ? ` <span class="dim">+${p.comments.length - 1}</span>` : ""}</span><span class="${p.keyword ? "bright" : "dim"}">${p.keyword ? "YES" : p.before ? "OLD" : "NO"}</span><span class="${p.reply === "SENT" ? "bright" : "dim"}">${p.reply}</span><span class="${p.dm === "SENT" ? "bright" : "dim"}">${p.dm}</span><span class="${p.tap === "YES" ? "bright" : "dim"}">${p.tap}</span><span class="${p.link === "SENT" ? "bright" : "dim"}">${p.link}</span><span class="dim">${ageShort(p.last)}</span>${p.note ? `<span class="lg-note mid raw">${esc(p.note)}</span>` : ""}</div>`,
                 )
                 .join("")
             : `<div class="ix-empty dim">NOTHING HERE</div>`);
       } else {
+        const nums = commentNumbers(rows);
         const sel = rows.filter((r) => (cat === "all" ? true : cat === "failed" ? isFail(r) : r.kind === cat));
         body =
-          `<div class="lg lg-rows lg-head dim"><span>TIME</span><span>USER</span><span>EVENT</span><span>STATUS</span><span>DETAIL</span></div>` +
+          `<div class="lg lg-rows lg-head dim"><span>NO</span><span>TIME</span><span>USER</span><span>EVENT</span><span>STATUS</span><span>DETAIL</span></div>` +
           (sel.length
             ? sel
                 .map(
-                  (r) => `<div class="lg lg-rows"><span class="dim">${stamp(r.at)}</span><span class="bright">${r.username ? "@" + esc(r.username) : "UNKNOWN"}</span><span class="mid">${LOG_KIND[r.kind] || esc(r.kind)}</span><span class="${isFail(r) || r.status === "sent" || r.status === "matched" ? "bright" : "dim"}">${LOG_STATUS[r.status] || esc(r.status)}${r.n > 1 ? " X" + r.n : ""}</span><span class="mid raw">${esc(r.detail || "-")}</span></div>`,
+                  (r) => `<div class="lg lg-rows"><span class="${r.kind === "comment" ? "mid" : "dim"}">${num3(nums.get(r.comment_id))}</span><span class="dim">${stamp(r.at)}</span><span class="bright">${r.username ? "@" + esc(r.username) : "UNKNOWN"}</span><span class="mid">${LOG_KIND[r.kind] || esc(r.kind)}</span><span class="${isFail(r) || r.status === "sent" || r.status === "matched" ? "bright" : "dim"}">${LOG_STATUS[r.status] || esc(r.status)}${r.n > 1 ? " X" + r.n : ""}</span><span class="mid raw">${esc(r.detail || "-")}</span></div>`,
                 )
                 .join("")
             : `<div class="ix-empty dim">NOTHING HERE</div>`);

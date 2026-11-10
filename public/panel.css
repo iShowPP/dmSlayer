@@ -197,7 +197,7 @@ label.field { margin-bottom: 10px; }
 .lg { display: grid; gap: 10px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--hair); min-width: 760px; font-variant-numeric: tabular-nums; }
 .lg > span { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lg:not(.lg-head):hover { background: var(--hair); }
-.lg-people { grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 2fr) 62px 62px 62px 40px 62px 44px; }
-.lg-rows { grid-template-columns: 124px minmax(110px, 1fr) 62px 96px minmax(160px, 3fr); }
+.lg-people { grid-template-columns: 40px minmax(120px, 1.2fr) minmax(120px, 2fr) 62px 62px 62px 40px 62px 44px; }
+.lg-rows { grid-template-columns: 40px 124px minmax(110px, 1fr) 62px 96px minmax(160px, 3fr); }
 .lg .lg-note { grid-column: 1 / -1; white-space: normal; padding-left: 12px; }
 .lg-rows > span:last-child { white-space: normal; overflow-wrap: anywhere; }
