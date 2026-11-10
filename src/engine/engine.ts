@@ -154,8 +154,8 @@ export class Engine {
       matchedCampaignId = campaign.campaign_id;
       await this.noteComment(evt, "matched", campaign.campaign_id);
 
-      // Public actions are per-comment (independent toggles), guarded so re-polls don't repeat them.
-      await this.runPublicActions(campaign, evt);
+      // The DM goes first and the public reply second, so "Sent you a DM!" is only ever posted
+      // under a comment whose DM really went out. A refused DM gets a different public reply.
 
       // Someone who already has a funnel entry. The button flow sends one opening per person, ever.
       // Direct delivery has no funnel to protect, so a NEW keyword comment gets the link again as
@@ -168,10 +168,13 @@ export class Engine {
             "repeat_delivery",
             `repeat:${campaign.campaign_id}:${evt.comment_id}`,
           );
-          if (ok) await this.note(campaign, evt, "link", "sent", "sent again for a repeat comment", `dm:${evt.comment_id}`);
-          else if (!(await this.dmRefused(campaign, evt))) pendingRetry = true;
+          if (ok) {
+            await this.note(campaign, evt, "link", "sent", "sent again for a repeat comment", `dm:${evt.comment_id}`);
+            await this.runPublicActions(campaign, evt);
+          } else if (!(await this.dmRefused(campaign, evt))) pendingRetry = true;
         } else {
           await this.note(campaign, evt, "dm", "skipped", "already messaged by this automation", `dm:${evt.comment_id}`);
+          await this.runPublicActions(campaign, evt);
         }
         continue;
       }
@@ -179,7 +182,8 @@ export class Engine {
       // New lead: comment_matched + opening_sent are logged only when the opening actually sends,
       // so a failed send neither inflates the funnel nor is double-counted on the retry.
       const sent = await this.sendOpening(campaign, evt);
-      if (!sent && !(await this.dmRefused(campaign, evt))) pendingRetry = true;
+      if (sent) await this.runPublicActions(campaign, evt);
+      else if (!(await this.dmRefused(campaign, evt))) pendingRetry = true;
     }
 
     if (matchedCampaignId === "-") await this.noteComment(evt, "no_keyword", null);
@@ -199,6 +203,26 @@ export class Engine {
     if (!/invalid for a private reply/i.test(why)) {
       await this.note(campaign, evt, "dm", "failed", `${why} (will retry)`, `dm:${evt.comment_id}`);
       return false;
+    }
+    // Second route: an ordinary DM to the person. Instagram only allows it if they have messaged
+    // this account recently, so it often fails too — but when it works they still get the link.
+    if (campaign.direct_delivery && !evt.igsid.startsWith("anon:")) {
+      const text = deliveryText(campaign);
+      const direct = await this.trySend(
+        () => this.client.sendText(evt.igsid, text),
+        "direct_dm_fallback",
+        `fallbackdm:${campaign.campaign_id}:${evt.comment_id}`,
+      );
+      if (direct) {
+        if (await createConversation(this.db, evt.igsid, campaign.campaign_id, evt.username ?? null, "DONE")) {
+          await logEvent(this.db, campaign.campaign_id, "comment_matched", evt.igsid);
+          await logEvent(this.db, campaign.campaign_id, "opening_sent", evt.igsid);
+          await logEvent(this.db, campaign.campaign_id, "delivered", evt.igsid);
+        }
+        await this.note(campaign, evt, "link", "sent", `${text} (sent as a normal DM; the private reply was refused)`, `dm:${evt.comment_id}`);
+        await this.runPublicActions(campaign, evt);
+        return true;
+      }
     }
     console.warn(`[dmSlayer] cannot DM @${evt.username ?? evt.igsid}: Instagram does not allow a private reply to this comment.`);
     await this.note(campaign, evt, "dm", "blocked", why, `dm:${evt.comment_id}`);
