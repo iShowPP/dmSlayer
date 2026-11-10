@@ -2,7 +2,7 @@
 // converts them to normalized events, and feeds the engine. A conservative account-wide hourly
 // cap on opening DMs guards the shared rate budget across cron ticks (Section 10).
 
-import { getActiveCampaigns, countEventsGlobal, kvGet, kvSet, now } from "../db";
+import { getActiveCampaigns, getLiveSince, countEventsGlobal, kvGet, kvSet, now } from "../db";
 import type { Runtime } from "../runtime";
 import { toUnixSeconds } from "../runtime";
 import type { NormalizedComment } from "../types";
@@ -23,6 +23,10 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
     console.warn(`[dmSlayer] opening cap reached (${openingsThisHour}/hr); deferring comment poll.`);
     return;
   }
+
+  // Only comments made after an automation was switched on count for it. Without this, going live
+  // on a post that already had keyword comments DMed everyone who had ever commented.
+  const liveSince = await getLiveSince(db);
 
   // Dedupe media so shared media across campaigns is fetched once.
   const mediaIds = [...new Set(campaigns.map((c) => c.media_id))];
@@ -65,9 +69,11 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
       // it, on this tick and on every tick after, since the same comment is re-read each time.
       // The engine only marks a comment processed once it has fully succeeded, so a comment that
       // throws here is left unprocessed and retried cleanly on the next tick.
+      const eligible = campaigns.filter((k) => evt.timestamp >= (liveSince.get(k.campaign_id) ?? 0));
+      if (eligible.length === 0) continue; // older than every automation watching this post
       handled++;
       try {
-        await rt.engine.handleComment(evt, campaigns);
+        await rt.engine.handleComment(evt, eligible);
       } catch (e) {
         failed++;
         lastError = e instanceof Error ? e.message : String(e);

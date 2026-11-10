@@ -32,6 +32,17 @@ export async function getActiveCampaigns(db: D1Database): Promise<Campaign[]> {
   return out;
 }
 
+/**
+ * When each active automation was last switched on (unix seconds). The comment poll ignores
+ * comments older than this, so going live never DMs people who commented before.
+ */
+export async function getLiveSince(db: D1Database): Promise<Map<string, number>> {
+  const rows = await db
+    .prepare("SELECT campaign_id, live_since FROM campaigns WHERE active = 1 AND archived_at IS NULL")
+    .all<{ campaign_id: string; live_since: number | null }>();
+  return new Map((rows.results ?? []).map((r) => [r.campaign_id, r.live_since ?? 0]));
+}
+
 export async function getCampaign(db: D1Database, campaignId: string): Promise<Campaign | null> {
   const row = await db
     .prepare("SELECT config_json FROM campaigns WHERE campaign_id = ?")
@@ -80,7 +91,12 @@ export async function getAllCampaigns(db: D1Database, opts: { archived?: boolean
 
 export async function setCampaignActive(db: D1Database, campaignId: string, active: boolean): Promise<void> {
   await db
-    .prepare("UPDATE campaigns SET active = ?, updated_at = ? WHERE campaign_id = ?")
+    .prepare(
+      `UPDATE campaigns SET
+         live_since = CASE WHEN ?1 = 1 AND (active = 0 OR live_since IS NULL) THEN ?2 ELSE live_since END,
+         active = ?1, updated_at = ?2
+       WHERE campaign_id = ?3`,
+    )
     .bind(active ? 1 : 0, now(), campaignId)
     .run();
 }
@@ -89,7 +105,12 @@ export async function setCampaignActive(db: D1Database, campaignId: string, acti
  * deleteCampaign, which is permanent — but stops it from being polled (see getActiveCampaigns). */
 export async function setCampaignArchived(db: D1Database, campaignId: string, archived: boolean): Promise<void> {
   await db
-    .prepare("UPDATE campaigns SET archived_at = ?, updated_at = ? WHERE campaign_id = ?")
+    .prepare(
+      `UPDATE campaigns SET
+         live_since = CASE WHEN ?1 IS NULL THEN ?2 ELSE live_since END,
+         archived_at = ?1, updated_at = ?2
+       WHERE campaign_id = ?3`,
+    )
     .bind(archived ? now() : null, now(), campaignId)
     .run();
 }
@@ -119,9 +140,13 @@ export async function deleteCampaign(db: D1Database, campaignId: string): Promis
 export async function upsertCampaign(db: D1Database, campaign: Campaign, active = true): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO campaigns (campaign_id, platform, media_id, config_json, active, updated_at)
-       VALUES (?, 'instagram', ?, ?, ?, ?)
+      `INSERT INTO campaigns (campaign_id, platform, media_id, config_json, active, updated_at, live_since)
+       VALUES (?1, 'instagram', ?2, ?3, ?4, ?5, ?5)
        ON CONFLICT(campaign_id) DO UPDATE SET
+         live_since = CASE
+           WHEN excluded.active = 1 AND (campaigns.active = 0 OR campaigns.live_since IS NULL
+                                         OR campaigns.media_id != excluded.media_id)
+           THEN excluded.updated_at ELSE campaigns.live_since END,
          media_id = excluded.media_id,
          config_json = excluded.config_json,
          active = excluded.active,

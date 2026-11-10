@@ -13,9 +13,21 @@ import { FakeClient } from "./helpers/fakeClient";
 const T = Math.floor(Date.now() / 1000);
 const fast = () => new SendQueue({ minIntervalMs: 0, maxRetries: 0, baseBackoffMs: 0 });
 
-/** The migration before the newest one — i.e. what a deployment that has not been updated looks like. */
-const PREVIOUS = migrationFiles().at(-2)!.replace(/\.sql$/, "");
-const LATEST = migrationFiles().at(-1)!;
+/**
+ * These tests are about the newest migration to the CONVERSATIONS table (tap_retries): PREVIOUS is
+ * the schema just before it, LATEST the migration that adds it. Later migrations that touch other
+ * tables (0006 adds campaigns.live_since) are applied up front by oldDb(), because the campaign
+ * helpers used for setup belong to the current code and need them.
+ */
+const PREVIOUS = "0004";
+const LATEST = migrationFiles().find((f) => f.startsWith("0005"))!;
+const UNRELATED_LATER = migrationFiles().filter((f) => f > LATEST);
+
+function oldDb() {
+  const h = makeTestDbWithHandle(PREVIOUS);
+  for (const f of UNRELATED_LATER) applyMigration(h.raw, f);
+  return h;
+}
 
 function campaign(over: Partial<Campaign> = {}): Campaign {
   return {
@@ -44,7 +56,7 @@ function seedOldRow(raw: ReturnType<typeof makeTestDbWithHandle>["raw"], igsid: 
 
 describe("migrating an existing database", () => {
   it("rows written by the previous schema survive, and pick up the new column's default", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS);
+    const { db, raw } = oldDb();
     await upsertCampaign(db, campaign(), true);
     for (const [igsid, state] of [["a", "AWAITING_TAP"], ["b", "AWAITING_FOLLOW"], ["c", "DONE"]] as const) {
       seedOldRow(raw, igsid, state);
@@ -65,7 +77,7 @@ describe("migrating an existing database", () => {
   });
 
   it("people mid-funnel still complete afterwards, and nobody is messaged twice", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS);
+    const { db, raw } = oldDb();
     const client = new FakeClient();
     await upsertCampaign(db, campaign({ check_follow: true }), true);
     const engine = new Engine(db, client as never, fast());
@@ -87,7 +99,7 @@ describe("migrating an existing database", () => {
 
 describe("deploying BEFORE migrating — why the order matters", () => {
   it("the person is DMed and then lost: no funnel row, and the comment retries forever", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS); // new code, old schema
+    const { db, raw } = oldDb(); // new code, old schema
     const client = new FakeClient();
     await upsertCampaign(db, campaign(), true);
     const engine = new Engine(db, client as never, fast());
@@ -109,7 +121,7 @@ describe("deploying BEFORE migrating — why the order matters", () => {
   });
 
   it("existing conversations are unaffected — the damage is confined to new leads", async () => {
-    const { db, raw } = makeTestDbWithHandle(PREVIOUS);
+    const { db, raw } = oldDb();
     const client = new FakeClient();
     await upsertCampaign(db, campaign(), true);
     seedOldRow(raw, "u1", "AWAITING_TAP");

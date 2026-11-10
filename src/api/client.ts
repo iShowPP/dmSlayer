@@ -166,9 +166,38 @@ export class InstagramClient {
 
   // ---- messaging (Send API) ----
 
+  /**
+   * POST to the Send API. When several apps are connected to one Instagram account, only the app
+   * that currently "owns" a conversation may write to it; otherwise Meta answers
+   * "(#100) The action is invalid as it's not the thread owner". In that case, ask for control of
+   * the thread and retry once. If control cannot be taken the original error is rethrown with what
+   * Meta said, so the cause is visible in the log and on the dashboard.
+   */
+  private async sendMessage<T>(body: { recipient: { id?: string; comment_id?: string } } & Record<string, unknown>): Promise<T> {
+    try {
+      return await this.post<T>(`/${this.igUserId}/messages`, body);
+    } catch (e) {
+      const notOwner = e instanceof InstagramApiError && /thread owner/i.test(e.message);
+      if (!notOwner || !body.recipient.id) throw e;
+      try {
+        await this.post(`/${this.igUserId}/take_thread_control`, { recipient: { id: body.recipient.id } });
+      } catch (t) {
+        const why = t instanceof Error ? t.message : String(t);
+        throw new InstagramApiError(
+          `${e.message} Another app connected to this Instagram account owns the conversation, and taking control failed: ${why}`,
+          e.status,
+          e.code,
+          e.subcode,
+          e.fbtraceId,
+        );
+      }
+      return await this.post<T>(`/${this.igUserId}/messages`, body);
+    }
+  }
+
   /** Send a plain text DM to a user by IGSID. */
   sendText(recipientIgsid: string, text: string): Promise<{ recipient_id?: string; message_id?: string }> {
-    return this.post(`/${this.igUserId}/messages`, {
+    return this.sendMessage({
       recipient: { id: recipientIgsid },
       message: { text },
     });
@@ -180,7 +209,7 @@ export class InstagramClient {
     text: string,
     quickReplies: QuickReply[],
   ): Promise<{ message_id?: string }> {
-    return this.post(`/${this.igUserId}/messages`, {
+    return this.sendMessage({
       recipient: { id: recipientIgsid },
       message: { text, quick_replies: quickReplies },
     });
@@ -192,7 +221,7 @@ export class InstagramClient {
     text: string,
     buttons: Button[],
   ): Promise<{ message_id?: string }> {
-    return this.post(`/${this.igUserId}/messages`, {
+    return this.sendMessage({
       recipient: recipient.commentId ? { comment_id: recipient.commentId } : { id: recipient.igsid },
       message: {
         attachment: {
