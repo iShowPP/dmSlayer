@@ -1044,38 +1044,50 @@ async function saveCampaign(activation) {
 }
 
 /* ================= DASHBOARD ================= */
-const EVENT_LABEL = {
-  comment_matched: "commented the keyword",
-  opening_sent: "was sent the opening DM",
-  button_clicked: "tapped the button",
-  follow_confirmed: "confirmed they followed",
-  email_captured: "shared their email",
-  delivered: "received the reward DM",
+/* Instrument-panel layout: numbered sections of four fixed types (headline, readouts, index list,
+   keys). Every figure is live data from /api/status, /api/dashboard, /api/account. */
+const EVENT_TAG = {
+  comment_matched: "COMMENT",
+  opening_sent: "DM SENT",
+  button_clicked: "TAP",
+  follow_confirmed: "FOLLOW",
+  email_captured: "EMAIL",
+  delivered: "LINK SENT",
 };
-const DM_KINDS = [
-  ["opening", "Opening DMs"],
-  ["follow_gate", "Follow prompts"],
-  ["email_ask", "Email asks"],
-  ["delivery", "Reward DMs"],
-  ["other", "Other"],
-];
-const fmt = (n) => Number(n || 0).toLocaleString();
+const fmt = (n) => Number(n || 0).toLocaleString("en-US");
+const pad2 = (n) => String(n).padStart(2, "0");
 let dashTimer = null;
+let dashHtml = "";
 
-/** Connection + health pill for the account card. */
-function healthPill(s) {
-  if (!s.connected) return `<span class="pill wait">not connected</span>`;
-  if (s.token_expired) return `<span class="pill wait">token expired</span>`;
-  if (s.poll_age_seconds === null || s.poll_age_seconds === undefined) return `<span class="pill open">waiting for first check</span>`;
-  if (!s.poll_healthy) return `<span class="pill wait">checker stalled</span>`;
-  return `<span class="pill done">running</span>`;
+/** Short age string: 4S, 3M, 2H, 5D. */
+function ageShort(ts) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+  if (s < 60) return s + "S";
+  if (s < 3600) return Math.floor(s / 60) + "M";
+  if (s < 86400) return Math.floor(s / 3600) + "H";
+  return Math.floor(s / 86400) + "D";
+}
+
+/** Section header: index, title, hairline, status. */
+function secHead(i, title, status) {
+  return `<div class="sec-head"><span class="dim">${pad2(i)}</span><span class="mid">${esc(title)}</span><span class="rule"></span><span class="dim">${esc(status)}</span></div>`;
+}
+
+/** Readout row: 3-letter label, percentage, flat bar, detail. */
+function readout(label, pct, detail) {
+  const p = Math.max(0, Math.min(100, Math.round(pct || 0)));
+  return `<div class="ro"><span class="dim">${esc(label)}</span><span class="bright">${p}%</span><span class="ro-bar"><i style="width:${p}%"></i></span><span class="mid ro-det">${esc(detail)}</span></div>`;
+}
+
+function pairs(list) {
+  return `<div class="pairs">${list.map(([k, v]) => `<span><span class="dim">${esc(k)}</span> <span class="mid">${esc(v)}</span></span>`).join("")}</div>`;
 }
 
 async function renderDashboard(silent = false) {
   const view = $("#view");
   clearTimeout(dashTimer);
+  if (!silent) dashHtml = "";
   const qs = new URLSearchParams();
-  if (store.dashCampaign) qs.set("campaign_id", store.dashCampaign);
   qs.set("days", String(store.dashDays));
   qs.set("tz", String(-new Date().getTimezoneOffset()));
   let data;
@@ -1092,151 +1104,165 @@ async function renderDashboard(silent = false) {
     data = d;
     account = acct;
   } catch (e) {
-    if (!silent) view.innerHTML = connectBanner() + `<div class="empty">${esc(e.message)}</div>`;
+    if (!silent) view.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
     scheduleDashRefresh();
     return;
   }
-  // The user may have navigated away while the requests were in flight.
-  if (store.page !== "dashboard") return;
+  if (store.page !== "dashboard") return; // navigated away while loading
 
   const s = store.status || {};
   const c = data.cards;
   const dms = data.dms;
-  const card = (val, label, sub) => `<div class="metric"><div class="m-val">${val}</div><div class="m-label">${label}</div>${sub ? `<div class="m-sub">${sub}</div>` : ""}</div>`;
+  const live = s.connected && !s.token_expired && s.poll_healthy;
+  const link = !s.connected ? "NO LINK" : s.token_expired ? "TOKEN EXPIRED" : s.poll_healthy ? "LIVE" : s.poll_age_seconds == null ? "STANDBY" : "STALLED";
 
-  const checked =
-    s.poll_age_seconds === null || s.poll_age_seconds === undefined
-      ? ""
-      : ` · last checked ${s.poll_age_seconds < 60 ? "just now" : Math.round(s.poll_age_seconds / 60) + " min ago"}`;
-  const accountCard = s.connected
-    ? `<div class="card acct">
-        <img class="acct-av" src="${esc(s.profile_picture_url || "")}" alt="" onerror="this.style.visibility='hidden'"/>
-        <div class="acct-main">
-          <div class="acct-name">@${esc(s.username || "account")} ${healthPill(s)}</div>
-          <div class="muted">${esc((s.account_type || "Instagram").toLowerCase())} account · ${s.expires_in_days > 400 ? "token does not expire" : `token renews itself, ${s.expires_in_days} days left`}${checked}</div>
-          ${s.comment_poll_error || s.poll_error ? `<div class="acct-err">${esc(s.comment_poll_error || s.poll_error)}</div>` : ""}
-        </div>
-        <div class="acct-stats">
-          ${account.available && account.followers !== null ? `<div><b>${fmt(account.followers)}</b><span>followers</span></div>` : ""}
-          ${account.available && account.posts !== null ? `<div><b>${fmt(account.posts)}</b><span>posts</span></div>` : ""}
-          <div><b>${fmt(data.overview.live_campaigns)}</b><span>live automations</span></div>
-          <div><b>${fmt(data.overview.people)}</b><span>people reached</span></div>
-        </div>
-      </div>`
-    : `<div class="card acct">
-        <div class="acct-main">
-          <div class="acct-name">No Instagram account connected</div>
-          <div class="muted">Connect your Instagram Professional account to start sending DMs and see live numbers here.</div>
-          ${s.manual_token_error ? `<div class="acct-err">The token in .dev.vars was rejected: ${esc(s.manual_token_error)}</div>` : ""}
-        </div>
-        <a class="btn primary" href="${authorizeUrl()}">Connect Instagram</a>
-      </div>`;
+  // ---- device strip ----
+  const strip = [
+    "DMSLAYER",
+    s.connected ? "IG " + (s.ig_user_id || "-") : "IG -",
+    s.connected ? "@" + (s.username || "-") : "NOT CONNECTED",
+    (s.account_type || "-"),
+    location.host,
+  ];
 
+  // ---- 01 headline: DMs today, positioned against the busiest day in range ----
   const peak = Math.max(0, ...dms.daily.map((d) => d.count));
-  const dayLabel = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
-  const bars = dms.daily
-    .map(
-      (d) => `<div class="bar-col" title="${esc(dayLabel(d.date))}: ${d.count} DM${d.count === 1 ? "" : "s"}">
-        <div class="bar" style="height:${d.count ? Math.max(4, Math.round((d.count / peak) * 100)) : 0}%"></div></div>`,
-    )
-    .join("");
-  const kinds = DM_KINDS.filter(([k]) => k !== "other" || dms.by_kind.other > 0)
-    .map(([k, label]) => {
-      const n = dms.by_kind[k] || 0;
-      const pct = dms.range > 0 ? Math.round((n / dms.range) * 100) : 0;
-      return `<div class="funnel-bar"><div class="fb-top"><span>${label}</span><span class="muted">${fmt(n)} · ${pct}%</span></div>
-        <div class="fb-track thin"><div class="fb-fill" style="width:${n ? Math.max(2, pct) : 0}%;min-width:0"></div></div></div>`;
-    })
-    .join("");
-  const names = Object.fromEntries(store.campaigns.map((x) => [x.campaign_id, x.name || x.campaign_id]));
-  const recent = data.recent.length
-    ? data.recent
+  const scale = Math.max(peak, dms.today, 1);
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map((f) => Math.round(scale * f));
+  const marker = Math.round((dms.today / scale) * 100);
+  const headline = `
+    ${secHead(1, "DMS SENT TODAY", link)}
+    <div class="hl">
+      <div class="hl-num">${fmt(dms.today)}</div>
+      <div class="hl-stack">
+        <span class="dim">LAST ${data.days} DAYS</span>
+        <span class="bright">${fmt(dms.range)} DMS</span>
+        <span class="mid">ALL TIME ${fmt(dms.all_time)}</span>
+        <span class="dim">PEAK DAY ${fmt(peak)}</span>
+      </div>
+    </div>
+    <div class="ruler"><i style="left:${marker}%"></i></div>
+    <div class="ticks">${ticks.map((t) => `<span class="dim">${fmt(t)}</span>`).join("")}</div>`;
+
+  // ---- 02 funnel readouts ----
+  const pc = (n) => (c.comments > 0 ? (n / c.comments) * 100 : 0);
+  const funnel = `
+    ${secHead(2, "FUNNEL", `${data.days}D`)}
+    ${readout("CMT", c.comments > 0 ? 100 : 0, fmt(c.comments) + " COMMENTS")}
+    ${readout("DMS", pc(c.sends), fmt(c.sends) + " FIRST DMS")}
+    ${readout("TAP", pc(c.clicks), fmt(c.clicks) + " TAPS")}
+    ${readout("FLW", pc(c.follows), fmt(c.follows) + " FOLLOWS")}
+    ${readout("EML", pc(c.emails), fmt(c.emails) + " EMAILS")}
+    ${readout("LNK", pc(c.delivered), fmt(c.delivered) + " LINKS SENT")}
+    ${pairs([["TAP RATE", c.ctr + "%"], ["REACHED", fmt(data.overview.people)], ["LIVE AUTOS", fmt(data.overview.live_campaigns)]])}`;
+
+  // ---- 03 last seven days ----
+  const week = dms.daily.slice(-7);
+  const wPeak = Math.max(1, ...week.map((d) => d.count));
+  const wSum = week.reduce((a, d) => a + d.count, 0);
+  const dayRow = (d) => {
+    const dt = new Date(d.date + "T00:00:00");
+    const lbl = dt.toLocaleDateString("en-US", { weekday: "short" });
+    const det = `${fmt(d.count)} DMS / ${pad2(dt.getDate())} ${dt.toLocaleDateString("en-US", { month: "short" })}`;
+    return readout(lbl, (d.count / wPeak) * 100, det);
+  };
+  const days = `
+    ${secHead(3, "LAST 7 DAYS", fmt(wSum) + " DMS")}
+    ${week.map(dayRow).join("")}
+    ${pairs([["PEAK", fmt(Math.max(0, ...week.map((d) => d.count)))], ["AVG/DAY", (wSum / 7).toFixed(1)], ["TODAY", fmt(dms.today)]])}`;
+
+  // ---- 04 account ----
+  const k = dms.by_kind;
+  const share = (n) => (dms.range > 0 ? (n / dms.range) * 100 : 0);
+  const acct = `
+    ${secHead(4, "OUTPUT BY TYPE", `${data.days}D`)}
+    ${readout("1ST", share(k.opening), fmt(k.opening) + " FIRST DMS")}
+    ${readout("FLW", share(k.follow_gate), fmt(k.follow_gate) + " FOLLOW ASKS")}
+    ${readout("EML", share(k.email_ask), fmt(k.email_ask) + " EMAIL ASKS")}
+    ${readout("LNK", share(k.delivery), fmt(k.delivery) + " LINK DMS")}
+    ${pairs([
+      ["FOLLOWERS", account.available && account.followers != null ? fmt(account.followers) : "-"],
+      ["POSTS", account.available && account.posts != null ? fmt(account.posts) : "-"],
+      ["CHECKED", s.poll_age_seconds == null ? "-" : s.poll_age_seconds < 60 ? s.poll_age_seconds + "S AGO" : Math.round(s.poll_age_seconds / 60) + "M AGO"],
+    ])}`;
+
+  // ---- 05 automations index ----
+  const autos = store.campaigns;
+  const liveCount = autos.filter((a) => a.active).length;
+  const autoRows = autos.length
+    ? autos
         .map(
-          (r) => `<div class="act-row"><span class="act-dot ${esc(r.type)}"></span>
-            <div class="act-text"><b>${r.username ? "@" + esc(r.username) : "Someone"}</b> ${EVENT_LABEL[r.type] || esc(r.type)}
-              <span class="muted">· ${esc(names[r.campaign_id] || r.campaign_id)}</span></div>
-            <span class="muted act-time">${timeAgo(r.created_at)}</span></div>`,
+          (a, i) => `<button class="ix" data-auto="${esc(a.campaign_id)}"><span class="dim">${pad2(i + 1)}</span><span class="bright ix-name">${esc(a.name || a.campaign_id)}</span><span class="dim">${a.active ? "LIVE" : "STOPPED"} / ${esc((a.keywords || [])[0] || "-")}</span><span class="dim">&gt;</span></button>`,
         )
         .join("")
-    : `<div class="empty small">Nothing yet. Activity shows up here the moment someone comments your keyword.</div>`;
+    : `<div class="ix-empty dim">NO AUTOMATIONS</div>`;
+  const autoSec = `${secHead(5, "AUTOMATIONS", pad2(liveCount) + " LIVE")}<div class="ixl">${autoRows}</div>`;
 
-  view.innerHTML = `
-    ${s.connected ? connectBanner() : ""}
-    <div class="page-head"><div><div class="page-title">Dashboard</div><div class="page-sub">Live numbers from your Instagram automations. Refreshes every 30 seconds.</div></div>
-      <div class="toolbar">
-        <div class="select-inline"><span class="muted">Campaign</span>
-          <select id="dashcamp"><option value="">All campaigns</option>${store.campaigns.map((x) => `<option value="${esc(x.campaign_id)}" ${x.campaign_id === store.dashCampaign ? "selected" : ""}>${esc(x.name || x.campaign_id)}</option>`).join("")}</select></div>
-        <div class="select-inline"><span class="muted">Range</span>
-          <select id="dashdays">${[7, 30, 90].map((n) => `<option value="${n}" ${n === store.dashDays ? "selected" : ""}>Last ${n} days</option>`).join("")}</select></div>
-      </div>
-    </div>
-    ${accountCard}
-    <div class="dm-hero">
-      <div class="metric hero"><div class="m-label">DMs sent today</div><div class="m-val">${fmt(dms.today)}</div></div>
-      <div class="metric hero"><div class="m-label">DMs sent, last ${data.days} days</div><div class="m-val">${fmt(dms.range)}</div></div>
-      <div class="metric hero"><div class="m-label">DMs sent, all time</div><div class="m-val">${fmt(dms.all_time)}</div></div>
-    </div>
-    <div class="dash-grid">
-      <div class="card">
-        <h3>DMs sent per day</h3>
-        <div class="hint">Every message dmSlayer sent, by day. Busiest day: ${fmt(peak)}.</div>
-        <div class="bars">${bars}</div>
-        <div class="bars-axis"><span>${esc(dayLabel(dms.daily[0].date))}</span><span>Today</span></div>
-      </div>
-      <div class="card">
-        <h3>What was sent</h3>
-        <div class="hint">DMs in this range, by step of the funnel.</div>
-        ${kinds}
-      </div>
-    </div>
-    <div class="metrics">
-      ${card(fmt(c.comments), "Keyword comments")}
-      ${card(fmt(c.clicks), "Button taps", c.ctr + "% of opening DMs")}
-      ${card(fmt(c.follows), "Follows confirmed")}
-      ${card(fmt(c.emails), "Emails collected")}
-      ${card(fmt(c.delivered), "Rewards delivered")}
-    </div>
-    <div class="dash-grid">
-      <div class="card">
-        <h3>Conversion funnel</h3>
-        <div class="hint">Percentages are relative to comments with the keyword.</div>
-        <div id="funnel"></div>
-      </div>
-      <div class="card">
-        <h3>Recent activity</h3>
-        <div class="hint">The latest things people did.</div>
-        ${recent}
+  // ---- 06 activity index ----
+  const actRows = data.recent.length
+    ? data.recent
+        .slice(0, 8)
+        .map(
+          (r, i) => `<button class="ix" data-go="contacts"><span class="dim">${pad2(i + 1)}</span><span class="bright ix-name">${r.username ? "@" + esc(r.username) : "UNKNOWN"}</span><span class="dim">${EVENT_TAG[r.type] || esc(r.type)} / ${ageShort(r.created_at)}</span><span class="dim">&gt;</span></button>`,
+        )
+        .join("")
+    : `<div class="ix-empty dim">NO ACTIVITY</div>`;
+  const actSec = `${secHead(6, "ACTIVITY", pad2(Math.min(8, data.recent.length)) + " RECENT")}<div class="ixl">${actRows}</div>`;
+
+  // ---- 07 keys ----
+  const key = (attr, label, on) => `<button class="key${on ? " on" : ""}" ${attr}>${label}</button>`;
+  const keys = `
+    ${secHead(7, "KEYS", "RANGE " + data.days + "D")}
+    <div class="keys">
+      ${[7, 30, 90].map((n) => key(`data-days="${n}"`, n + "D", n === store.dashDays)).join("")}
+      ${key('data-go="create"', "NEW AUTO")}
+      ${key('data-go="contacts"', "CONTACTS")}
+      ${s.connected && !s.token_expired ? "" : `<a class="key" href="${authorizeUrl()}">CONNECT IG</a>`}
+    </div>`;
+
+  const err = s.comment_poll_error || s.poll_error;
+  const html = `
+    <div class="panel-root">
+      <div class="strip">${strip.map((t) => `<span class="dim">${esc(t)}</span>`).join("")}</div>
+      ${err ? `<div class="fault mid">FAULT / ${esc(err.message || String(err))}</div>` : ""}
+      ${s.manual_token_error ? `<div class="fault mid">TOKEN REJECTED / ${esc(s.manual_token_error)}</div>` : ""}
+      <div class="panels">
+        <div class="panel">${headline}${days}</div>
+        <div class="panel">${funnel}${acct}</div>
+        <div class="panel">${autoSec}</div>
+        <div class="panel">${actSec}</div>
+        <div class="panel wide">${keys}</div>
       </div>
     </div>`;
 
-  const funnel = $("#funnel");
-  data.funnel.forEach((f) => {
-    funnel.appendChild(
-      el(`<div class="funnel-bar"><div class="fb-top"><span>${f.label}</span><span class="muted">${fmt(f.value)} · ${f.pct}%</span></div>
-        <div class="fb-track"><div class="fb-fill" style="width:${Math.max(2, f.pct)}%"></div></div></div>`),
-    );
-  });
-
-  $("#dashcamp").onchange = (e) => {
-    store.dashCampaign = e.target.value;
-    renderDashboard();
-  };
-  $("#dashdays").onchange = (e) => {
-    store.dashDays = Number(e.target.value);
-    renderDashboard();
-  };
+  // Values update in place: the DOM is only touched when something actually changed.
+  if (html !== dashHtml) {
+    dashHtml = html;
+    view.innerHTML = html;
+    view.querySelectorAll("[data-days]").forEach((b) => (b.onclick = () => {
+      store.dashDays = Number(b.dataset.days);
+      renderDashboard(true);
+    }));
+    view.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => {
+      store.page = b.dataset.go;
+      paintNav();
+      route();
+    }));
+    view.querySelectorAll("[data-auto]").forEach((b) => (b.onclick = () => {
+      const a = store.campaigns.find((x) => x.campaign_id === b.dataset.auto);
+      if (a) openInBuilder(a);
+    }));
+  }
   scheduleDashRefresh();
 }
 
-/** Keep the numbers live while the dashboard is open; never repaint under an open dropdown. */
+/** Keep the readouts live while the dashboard is open. */
 function scheduleDashRefresh() {
   clearTimeout(dashTimer);
   dashTimer = setTimeout(() => {
     if (store.page !== "dashboard" || !store.token) return;
-    const a = document.activeElement;
-    if (a && a.tagName === "SELECT") return scheduleDashRefresh();
     renderDashboard(true);
-  }, 30000);
+  }, 5000);
 }
 
 /* ================= CONTACTS ================= */
