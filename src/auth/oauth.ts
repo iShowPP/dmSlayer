@@ -3,7 +3,7 @@
 // "Connect Instagram" button sends the owner to Instagram's authorize page; the callback
 // exchanges the returned code for a short-lived token, then a long-lived (~60 day) token.
 //
-// chatmany never sees the user's Instagram password — approval happens on Instagram's page.
+// dmSlayer never sees the user's Instagram password — approval happens on Instagram's page.
 
 import { InstagramApiError } from "../api/client";
 
@@ -80,4 +80,41 @@ export async function exchangeForLongLivedToken(
   if (!res.ok) throw new InstagramApiError(`long-lived exchange failed: ${text}`, res.status);
   const json = JSON.parse(text) as LongLivedTokenResponse;
   return { accessToken: json.access_token, expiresIn: json.expires_in };
+}
+
+// ---- Unified login (Facebook Login for Business) ----
+// Apps created in Meta's newer dashboard cannot use the Instagram-login flow above. They log in on
+// facebook.com with the META app id/secret plus a configuration id, and receive a system-user
+// token that is used against graph.facebook.com. The permissions come from the configuration
+// (instagram_basic, instagram_manage_messages, instagram_manage_comments), not from a scope list.
+
+/** Build the facebook.com authorize URL for a Unified-login app. */
+export function buildUnifiedAuthorizeUrl(appId: string, configId: string, redirectUri: string, state: string): string {
+  const url = new URL("https://www.facebook.com/dialog/oauth");
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("config_id", configId);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
+/** Exchange the code for the system-user token. `expiresIn` is absent for a never-expiring token. */
+export async function exchangeCodeForUnifiedToken(
+  version: string,
+  appId: string,
+  appSecret: string,
+  redirectUri: string,
+  code: string,
+): Promise<{ accessToken: string; expiresIn?: number }> {
+  const url = new URL(`https://graph.facebook.com/${version}/oauth/access_token`);
+  url.searchParams.set("client_id", appId);
+  url.searchParams.set("client_secret", appSecret);
+  url.searchParams.set("redirect_uri", redirectUri);
+  url.searchParams.set("code", code);
+  const res = await fetch(url.toString());
+  const text = await res.text();
+  if (!res.ok) throw new InstagramApiError(`code exchange failed: ${text}`, res.status);
+  const json = JSON.parse(text) as { access_token: string; expires_in?: number };
+  return { accessToken: json.access_token, expiresIn: json.expires_in || undefined };
 }

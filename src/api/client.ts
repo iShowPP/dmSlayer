@@ -4,8 +4,11 @@
 // against the API version pinned in wrangler.toml (GRAPH_VERSION).
 
 const GRAPH_HOST = "https://graph.instagram.com";
+/** Host for apps on Meta's "Unified login" (Facebook Login for Business). Instagram-Login tokens
+ *  and graph.instagram.com do not work for those apps, and vice versa. */
+const UNIFIED_GRAPH_HOST = "https://graph.facebook.com";
 
-/** Webhook fields chatmany consumes. `comments` drives the funnel entry; `messages` carries taps,
+/** Webhook fields dmSlayer consumes. `comments` drives the funnel entry; `messages` carries taps,
  *  postback payloads, and typed replies. Both are needed — subscribing to only one silently breaks
  *  half the funnel. */
 export const WEBHOOK_FIELDS = "comments,messages";
@@ -92,10 +95,18 @@ export class InstagramClient {
     private readonly version: string,
     /** The connected account's IG user id; message sends are POSTed to /{igUserId}/messages. */
     private readonly igUserId: string = "me",
+    /** True for Unified-login apps: calls go to graph.facebook.com, and "/me" is the system user
+     *  rather than the Instagram account, so the account is always addressed by its id. */
+    private readonly unified: boolean = false,
   ) {}
 
+  /** Path of the connected Instagram account node. */
+  private get self(): string {
+    return this.unified ? `/${this.igUserId}` : "/me";
+  }
+
   private base(path: string): string {
-    return `${GRAPH_HOST}/${this.version}${path.startsWith("/") ? path : `/${path}`}`;
+    return `${this.unified ? UNIFIED_GRAPH_HOST : GRAPH_HOST}/${this.version}${path.startsWith("/") ? path : `/${path}`}`;
   }
 
   /** GET with query params; access_token appended automatically. */
@@ -266,15 +277,29 @@ export class InstagramClient {
    * The connected account's profile. Requests only widely-supported fields so OAuth connect never
    * fails on an account where an optional field (e.g. followers_count) isn't returnable.
    */
-  getMe(): Promise<IgProfile> {
+  async getMe(): Promise<IgProfile> {
+    if (this.unified) {
+      const p = await this.get<{ id: string; username: string; profile_picture_url?: string }>(this.self, {
+        fields: "id,username,profile_picture_url",
+      });
+      return { user_id: p.id, username: p.username, profile_picture_url: p.profile_picture_url };
+    }
     return this.get<IgProfile>(`/me`, {
       fields: "user_id,username,account_type,profile_picture_url",
     });
   }
 
+  /**
+   * Live audience numbers for the dashboard. Kept separate from getMe so an account that cannot
+   * return these optional fields never breaks connecting — the dashboard just hides the tiles.
+   */
+  getAccountStats(): Promise<{ followers_count?: number; follows_count?: number; media_count?: number }> {
+    return this.get(this.self, { fields: "followers_count,follows_count,media_count" });
+  }
+
   /** The connected account's media (for the builder media picker + preview). */
   async getMedia(limit = 25): Promise<IgMedia[]> {
-    const res = await this.get<{ data?: IgMedia[] }>(`/me/media`, {
+    const res = await this.get<{ data?: IgMedia[] }>(`${this.self}/media`, {
       fields: "id,caption,media_type,media_url,thumbnail_url,permalink,like_count,comments_count",
       limit: String(limit),
     });
@@ -287,6 +312,25 @@ export class InstagramClient {
   // An earlier version compared the account's TOTAL follower count before and after sending the
   // gate, which is noise: anyone else following in that window passed a non-follower through, and
   // a single unfollow elsewhere rejected a genuine one. The follow gate is a nudge, not a check.
+}
+
+// ---- Unified login helpers ----
+
+/**
+ * Instagram accounts a Unified-login token was granted. With that login "/me" is a system user,
+ * so this is how the connected Instagram account's id is discovered.
+ */
+export async function listAssignedInstagramAccounts(
+  version: string,
+  accessToken: string,
+): Promise<Array<{ id: string; username?: string }>> {
+  const url = new URL(`${UNIFIED_GRAPH_HOST}/${version}/me/assigned_instagram_accounts`);
+  url.searchParams.set("fields", "id,username");
+  url.searchParams.set("access_token", accessToken);
+  const res = await fetch(url.toString());
+  const text = await res.text();
+  if (!res.ok) throw new InstagramApiError(`could not list Instagram accounts: ${text}`, res.status);
+  return (JSON.parse(text) as { data?: Array<{ id: string; username?: string }> }).data ?? [];
 }
 
 // ---- token endpoints (no access token instance needed) ----

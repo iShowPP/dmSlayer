@@ -1,6 +1,38 @@
-# chatmany
+# dmSlayer
 
-Self-hosted Instagram **comment-to-DM** automation, using the **official Meta Instagram API only** — no scraping, no unofficial access. When someone comments a keyword on your post or reel, chatmany DMs them, optionally asks them to follow, optionally captures their email, then delivers a link or reward.
+Self-hosted Instagram **comment-to-DM** automation, using the **official Meta Instagram API only** — no scraping, no unofficial access. When someone comments a keyword on your post or reel, dmSlayer DMs them, optionally asks them to follow, optionally captures their email, then delivers a link or reward.
+
+> dmSlayer is a renamed, locally-hosted build of [chatmany](https://github.com/ryanlaiyanip-ctrl/chatmany) (MIT) with a live DM dashboard added.
+
+## Run it on your own computer
+
+```bash
+npm install
+```
+
+```bash
+npm run local
+```
+
+The first run creates `.dev.vars` (your local secrets, gitignored) with a random owner token, builds the local database, starts the app at `https://localhost:8787`, and prints a sign-in link. It also checks Instagram once a minute, which Cloudflare's cron would otherwise do. Keep the window open while you want DMs to go out.
+
+**Connecting Instagram locally**
+
+1. Create the Meta app exactly as in [Part 1](#part-1--create-your-meta-app) below.
+2. Paste the **Instagram app ID** and **Instagram app secret** into `.dev.vars` as `APP_ID` and `APP_SECRET`.
+3. Register `https://localhost:8787/auth/callback` as the redirect URL in both places described in steps 3.3 and 3.4.
+4. Restart `npm run local`, open the printed link, and click **Connect Instagram**.
+
+**What is different from the Cloudflare deploy**
+
+- No instant delivery: Meta cannot push webhooks to `localhost`, so DMs go out on the next one-minute check.
+- It only works while this computer is on and `npm run local` is running.
+- Your browser shows a certificate warning once, because the local HTTPS certificate is self-signed.
+- Publishing the Meta app (step 3.7) needs public privacy/terms URLs, which `localhost` cannot provide. Until it is published, Instagram only returns comments and messages from accounts that have a role on your Meta app.
+
+The rest of this document is the original Cloudflare setup guide.
+
+---
 
 You clone this repo, create your own Meta app, connect your own Instagram account, and deploy your own instance on Cloudflare's free tier. **The author hosts nothing and stores none of your data.** Free ($0/month) at single-creator scale.
 
@@ -21,7 +53,7 @@ Setup involves a terminal and Meta's developer dashboard. If that isn't your com
 ---
 
 ```text
-I want to install "chatmany" — a self-hosted Instagram comment-to-DM tool —
+I want to install "dmSlayer" — a self-hosted Instagram comment-to-DM tool —
 on my own computer and my own free Cloudflare account.
 
 The complete setup guide is the README here:
@@ -64,7 +96,7 @@ Start by telling me what I need to have ready before we begin.
 ## Requirements
 
 - An Instagram **Professional** account (Creator or Business). Personal accounts are unsupported — switch in the Instagram app under **Settings → Account type and tools → Switch to professional account**.
-- **A second Instagram account** to test with — any personal account works, including a friend's. You cannot trigger your own campaign from the account chatmany is running, because it would have to DM itself.
+- **A second Instagram account** to test with — any personal account works, including a friend's. You cannot trigger your own campaign from the account dmSlayer is running, because it would have to DM itself.
 - A free [Cloudflare](https://dash.cloudflare.com) account (Workers + D1).
 - A free [Meta developer](https://developers.facebook.com) account.
 - **Node.js 22 or newer** and `npm` locally (to deploy). Check yours with `node -v`; if it prints anything below `v22`, update from [nodejs.org](https://nodejs.org) or the deploy tooling will refuse to run.
@@ -73,7 +105,7 @@ Start by telling me what I need to have ready before we begin.
 
 ## Setup
 
-> **Already have chatmany running?** Don't work through this again — see
+> **Already have dmSlayer running?** Don't work through this again — see
 > **[Updating an existing install](#updating-an-existing-install)**. It takes about five minutes.
 
 **Read this first.** Setup takes about 45 minutes. It has six parts, and **they must be done in this order**, because Part 3 needs a web address that doesn't exist until Part 2 creates it:
@@ -81,10 +113,10 @@ Start by telling me what I need to have ready before we begin.
 | Part | What you do | Where |
 |---|---|---|
 | **1** | Create a Meta app and copy two values out of it | Meta's website |
-| **2** | Put chatmany online, get your web address | Your computer's terminal |
+| **2** | Put dmSlayer online, get your web address | Your computer's terminal |
 | **3** | Give that address back to Meta, turn on instant delivery, then Publish | Meta's website |
 | **4** | Connect your Instagram account | Your browser |
-| **5** | Build your first campaign | Your chatmany dashboard |
+| **5** | Build your first campaign | Your dmSlayer dashboard |
 | **6** | Confirm instant delivery is on | Your computer's terminal |
 
 You do not need to know how to code. Every terminal command is written out to copy and paste.
@@ -124,7 +156,7 @@ On the page that loads, click the green **Create app** button.
 
 #### 1.3 — Name it
 
-In the **App name** box, type any name you want — `chatmany` is fine. Nobody but you sees this.
+In the **App name** box, type any name you want — `dmSlayer` is fine. Nobody but you sees this.
 
 Check that the **App contact email** box has your email in it (Meta usually fills this in for you).
 
@@ -138,7 +170,7 @@ Click the card that says **"Manage messaging and content on Instagram"**.
 
 > **Can't find it?** Press **Cmd+F** (Mac) or **Ctrl+F** (Windows) and type `Instagram`. Your browser will highlight it.
 >
-> **Do not** pick any card mentioning **Facebook Login**, **Facebook Pages**, or **Business Integration**. Those are different products and chatmany will not work with them.
+> **Do not** pick any card mentioning **Facebook Login**, **Facebook Pages**, or **Business Integration**. Those are different products and dmSlayer will not work with them.
 
 Click **Next**, then click **Go to dashboard** (or **Create app**, depending on which Meta shows you). If it asks for your Facebook password, type it in — that's Meta confirming it's you.
 
@@ -173,7 +205,7 @@ Each should show a status like **"Ready for testing"**. The button you clicked a
 >
 > | Page | What it's labelled | Use it? |
 > |---|---|---|
-> | App settings → Basic | "App ID" / "App secret" | ❌ **NO** — chatmany never uses these |
+> | App settings → Basic | "App ID" / "App secret" | ❌ **NO** — dmSlayer never uses these |
 > | Use cases → Customize → API setup with Instagram login | "**Instagram** app ID" / "**Instagram** app secret" | ✅ **YES** |
 >
 > Pick the wrong pair and everything still installs, deploys, and looks perfectly healthy — then Part 4 dead-ends on Instagram's own page with:
@@ -195,7 +227,7 @@ Inside it you'll find two values:
 >
 > The same section has a tempting **Generate token** button. **Don't click it.** You do not need to create a token by hand at any point — Part 4 does it for you, automatically and correctly.
 >
-> That button produces a *debug* token meant for manually poking at the API. It looks like it worked, and chatmany will even accept it, but:
+> That button produces a *debug* token meant for manually poking at the API. It looks like it worked, and dmSlayer will even accept it, but:
 >
 > | | "Generate token" button | Part 4 (the Connect flow) |
 > |---|---|---|
@@ -228,7 +260,7 @@ Click **Add people**, type your Instagram username (without the `@`), and click 
 
 ---
 
-### Part 2 — Put chatmany online
+### Part 2 — Put dmSlayer online
 
 Everything here happens in a terminal. That's a window where you type commands instead of clicking buttons.
 
@@ -241,7 +273,7 @@ Everything here happens in a terminal. That's a window where you type commands i
 #### 2.1 — Download the code
 
 ```bash
-git clone https://github.com/ryanlaiyanip-ctrl/chatmany.git chatmany
+git clone https://github.com/ryanlaiyanip-ctrl/chatmany.git dmSlayer
 ```
 
 > **`git: command not found`?** Install it: Mac — run `xcode-select --install` and click through the installer. Windows — download from [git-scm.com](https://git-scm.com/downloads).
@@ -249,7 +281,7 @@ git clone https://github.com/ryanlaiyanip-ctrl/chatmany.git chatmany
 #### 2.2 — Go into the folder and install
 
 ```bash
-cd chatmany
+cd dmSlayer
 ```
 
 ```bash
@@ -275,7 +307,7 @@ Return to your terminal. It should say **"Successfully logged in."**
 #### 2.4 — Create your database
 
 ```bash
-npx wrangler d1 create chatmany
+npx wrangler d1 create dmslayer
 ```
 
 The output contains a line that looks like this:
@@ -288,12 +320,12 @@ database_id = "a1b2c3d4-5678-90ab-cdef-1234567890ab"
 
 #### 2.5 — Paste the database ID into the settings file
 
-Open the file `wrangler.toml`, which is inside the `chatmany` folder you just downloaded.
+Open the file `wrangler.toml`, which is inside the `dmSlayer` folder you just downloaded.
 
 > **You only need to change one line in this file: the database ID, below.** Everything else is
 > already set correctly. In particular, leave `MODE = "polling"` exactly as it is. Despite the name
 > it does not control whether delivery is instant — instant comes from step 3.5 — and changing it
-> to `"webhook"` is the most common way people accidentally make chatmany 15× slower.
+> to `"webhook"` is the most common way people accidentally make dmSlayer 15× slower.
 
 **Easiest way to find it:** in the same terminal you've been using, run this — it opens the exact right folder in a window, no hunting:
 
@@ -310,7 +342,7 @@ Near the top you'll see:
 ```toml
 [[d1_databases]]
 binding = "DB"
-database_name = "chatmany"
+database_name = "dmslayer"
 database_id = "REPLACE-WITH-THE-ID-FROM-wrangler-d1-create"
 ```
 
@@ -337,7 +369,7 @@ Run these **one at a time**. After each, the terminal waits for you to paste a v
 > **On the very first one, you'll get an extra question.** Because nothing has been deployed yet, wrangler asks:
 >
 > ```
-> There doesn't seem to be a Worker called "chatmany". Do you want to
+> There doesn't seem to be a Worker called "dmslayer". Do you want to
 > create a new Worker with that name and add secrets to it?
 > ```
 >
@@ -359,7 +391,7 @@ Paste your **`INSTAGRAM APP SECRET`** from step 1.6.
 npx wrangler secret put OWNER_TOKEN
 ```
 
-This one you **make up yourself** — nothing to copy. It's the password for your own chatmany dashboard.
+This one you **make up yourself** — nothing to copy. It's the password for your own dmSlayer dashboard.
 
 **Make it at least 20 characters.** This single value is the only thing protecting your contacts, emails, and campaigns from anyone who finds your web address. Mash your keyboard, or use `xk29fJ3mQpz81LwT4nBv`.
 
@@ -384,13 +416,13 @@ npm run deploy
 Near the bottom of the output is a real web address:
 
 ```
-https://chatmany.your-name.workers.dev
+https://dmslayer.your-name.workers.dev
 ```
 
 **Copy it into your note as `MY ADDRESS`.** Almost everything in Part 3 needs it.
 
 > ### ✅ Before leaving Part 2:
-> Paste `MY ADDRESS` into your browser with `/health` on the end — e.g. `https://chatmany.your-name.workers.dev/health`
+> Paste `MY ADDRESS` into your browser with `/health` on the end — e.g. `https://dmslayer.your-name.workers.dev/health`
 >
 > You should see: `{"ok":true,"mode":"polling"}`
 >
@@ -412,10 +444,10 @@ Open `wrangler.toml` again (same file as step 2.5). Near the bottom, find:
 REDIRECT_URI = "https://REPLACE-WITH-YOUR-WORKER-URL.workers.dev/auth/callback"
 ```
 
-Replace what's inside the quotes with **`MY ADDRESS` + `/auth/callback`**. If your address is `https://chatmany.abc123.workers.dev`, it becomes:
+Replace what's inside the quotes with **`MY ADDRESS` + `/auth/callback`**. If your address is `https://dmslayer.abc123.workers.dev`, it becomes:
 
 ```toml
-REDIRECT_URI = "https://chatmany.abc123.workers.dev/auth/callback"
+REDIRECT_URI = "https://dmslayer.abc123.workers.dev/auth/callback"
 ```
 
 Save the file.
@@ -464,7 +496,7 @@ In the left sidebar go to **Webhooks** → choose **Instagram**, then **Subscrib
 | Callback URL | **`MY ADDRESS`** + `/webhook` |
 | Verify token | your **`VERIFY TOKEN`** from step 2.7, exactly |
 
-Click **Verify and save**. Meta immediately calls your worker to check the token; chatmany answers
+Click **Verify and save**. Meta immediately calls your worker to check the token; dmSlayer answers
 automatically, so this should just succeed.
 
 > **"The callback URL or verify token couldn't be validated."** The token here doesn't match the
@@ -488,7 +520,7 @@ failure shows an error anywhere.
 
 In the **left sidebar**, click **App settings** → **Basic**.
 
-Fill in these three boxes using `MY ADDRESS` — chatmany already serves all three pages, so they work the moment you deployed:
+Fill in these three boxes using `MY ADDRESS` — dmSlayer already serves all three pages, so they work the moment you deployed:
 
 | Box on the page | What to paste |
 |---|---|
@@ -504,7 +536,7 @@ Click **Save changes** at the bottom.
 
 At the top of the dashboard, find the toggle that says **Development** and switch it to **Live**. (On some layouts this is a **Publish** button instead.)
 
-> ⚠️ **This step is not optional, and skipping it fails in a way that looks like a bug in chatmany.** While the app sits in Development mode, Instagram accepts your login but then returns **empty lists** for comments and messages. Your campaigns will simply never fire, with no error anywhere.
+> ⚠️ **This step is not optional, and skipping it fails in a way that looks like a bug in dmSlayer.** While the app sits in Development mode, Instagram accepts your login but then returns **empty lists** for comments and messages. Your campaigns will simply never fire, with no error anywhere.
 
 > ### ✅ Before leaving Part 3:
 > 1. Open all three in your browser — `MY ADDRESS` + `/privacy`, `/terms`, `/data-deletion`. Each must show a real page, not "not found."
@@ -516,11 +548,11 @@ At the top of the dashboard, find the toggle that says **Development** and switc
 
 Open a browser tab logged into the Instagram account you added as a tester in step 1.7.
 
-Go to **`MY ADDRESS` + `/auth/authorize`** — for example `https://chatmany.abc123.workers.dev/auth/authorize`.
+Go to **`MY ADDRESS` + `/auth/authorize`** — for example `https://dmslayer.abc123.workers.dev/auth/authorize`.
 
 Instagram shows its own permission screen. Click **Allow**.
 
-> 🔒 You're typing your password on **instagram.com**, not into chatmany. chatmany never sees it — it only receives a token afterwards.
+> 🔒 You're typing your password on **instagram.com**, not into dmSlayer. dmSlayer never sees it — it only receives a token afterwards.
 
 You'll bounce back to your own site. That's it — you're connected. The token lasts 60 days and renews itself daily, automatically.
 
@@ -543,7 +575,7 @@ Two possible causes.
 Check what your site is actually sending. Paste this into your terminal, replacing the address with yours:
 
 ```bash
-curl -s -o /dev/null -D - https://chatmany.abc123.workers.dev/auth/authorize | grep -i location
+curl -s -o /dev/null -D - https://dmslayer.abc123.workers.dev/auth/authorize | grep -i location
 ```
 
 Read the `client_id=` number in the output. Now compare it to the **Instagram app ID** at *Use cases → Customize → API setup with Instagram login*.
@@ -590,22 +622,22 @@ Your app is still in **Development** mode — step 3.7. Instagram returns empty 
 </details>
 
 <details>
-<summary><b>"Couldn't find a D1 DB with the name or binding 'chatmany'"</b></summary>
+<summary><b>"Couldn't find a D1 DB with the name or binding 'dmSlayer'"</b></summary>
 
 Only happens if you renamed things in step 2.5 to run a second copy.
 
-Open `package.json`, find these two lines, and change `chatmany` to your new name in both:
+Open `package.json`, find these two lines, and change `dmSlayer` to your new name in both:
 
 ```json
-"db:migrate:local": "wrangler d1 migrations apply chatmany --local",
-"db:migrate:remote": "wrangler d1 migrations apply chatmany --remote"
+"db:migrate:local": "wrangler d1 migrations apply dmslayer --local",
+"db:migrate:remote": "wrangler d1 migrations apply dmslayer --remote"
 ```
 </details>
 
 <details>
 <summary><b>Deploy fails mentioning cron triggers</b></summary>
 
-Cloudflare's free plan allows 5 cron triggers per account, and each chatmany install uses 2 — so you can run two installs, not three.
+Cloudflare's free plan allows 5 cron triggers per account, and each dmSlayer install uses 2 — so you can run two installs, not three.
 
 Note the Worker itself still deploys successfully when this happens, so it looks half-broken rather than clearly blocked. Delete an old install with `npx wrangler delete <name>`.
 </details>
@@ -614,7 +646,7 @@ Note the Worker itself still deploys successfully when this happens, so it looks
 
 ### Part 5 — Build your first campaign
 
-Open **`MY ADDRESS`** in your browser and sign in with the `OWNER TOKEN` from your note. You get the **chatmany web UI**:
+Open **`MY ADDRESS`** in your browser and sign in with the `OWNER TOKEN` from your note. You get the **dmSlayer web UI**:
 
 - **Automations** — every campaign as a row: status, keyword, runs, CTR. Bulk-select to **Archive** (pause without losing history) or **Delete** (permanent, cascades everywhere).
 - **Create** — a visual builder: pick the post/reel, set keywords (whole-word), toggle the public reply / follow-gate / email steps, and write your copy. A live Instagram phone preview (driven by your own avatar, handle, and selected post) shows exactly what followers see across Post / Comments / DM. Hit **Go live**.
@@ -627,7 +659,7 @@ Open **`MY ADDRESS`** in your browser and sign in with the `OWNER TOKEN` from yo
 Make a copy of `config.example.json` named `config.json`, set your `media_id` and keywords in it, then import it. Replace **both** placeholders below with your own values — the address with `MY ADDRESS`, and `YOUR_OWNER_TOKEN` with the `OWNER TOKEN` from your note:
 
 ```bash
-curl -X POST https://chatmany.abc123.workers.dev/config/import \
+curl -X POST https://dmslayer.abc123.workers.dev/config/import \
   -H "Authorization: Bearer YOUR_OWNER_TOKEN" \
   -H "content-type: application/json" \
   --data @config.json
@@ -650,18 +682,18 @@ Registering the callback URL in 3.5 subscribed your **app**. Your **account** al
 subscribed, and those are two different things. This is the single most common reason someone gets
 "the webhook verified fine but nothing ever arrives".
 
-chatmany subscribes your account automatically every time you connect Instagram, so Part 4 normally
+dmSlayer subscribes your account automatically every time you connect Instagram, so Part 4 normally
 handles it. To confirm:
 
 ```bash
-curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://chatmany.abc123.workers.dev/admin/webhook
+curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://dmslayer.abc123.workers.dev/admin/webhook
 ```
 
 Look for `"subscribed": true`. If it says `false` — most likely because you connected Instagram
 before doing step 3.5 — subscribe it now:
 
 ```bash
-curl -s -X POST -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://chatmany.abc123.workers.dev/admin/webhook
+curl -s -X POST -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://dmslayer.abc123.workers.dev/admin/webhook
 ```
 
 Disconnecting and reconnecting from the dashboard does the same thing.
@@ -702,7 +734,7 @@ push ever breaks, you'd wait 15 minutes to find out instead of 60 seconds.
 
 ## Updating an existing install
 
-Already running chatmany and want the newest version? You do **not** need to redo Setup. This takes
+Already running dmSlayer and want the newest version? You do **not** need to redo Setup. This takes
 about five minutes.
 
 ### 🤖 Want an AI to do it for you?
@@ -715,7 +747,7 @@ It knows the two things that go wrong.
 ---
 
 ```text
-I already have "chatmany" installed and running — a self-hosted Instagram
+I already have "dmSlayer" installed and running — a self-hosted Instagram
 comment-to-DM tool on my own Cloudflare account. I want to update it to the
 latest version. I am not a programmer.
 
@@ -757,8 +789,8 @@ At the end, help me confirm it worked, and check whether instant delivery is
 switched on for my install. If it is not, offer to walk me through turning it
 on — it is a one-time job in the Meta dashboard and takes about five minutes.
 
-Start by asking me to confirm chatmany is currently working, and to have my
-Cloudflare login and my chatmany folder ready.
+Start by asking me to confirm dmSlayer is currently working, and to have my
+Cloudflare login and my dmSlayer folder ready.
 ```
 
 ---
@@ -823,7 +855,7 @@ npm run deploy
 ### Step 5 — Check it worked
 
 ```bash
-curl https://chatmany.abc123.workers.dev/health
+curl https://dmslayer.abc123.workers.dev/health
 ```
 
 Should print `{"ok":true,"mode":"polling"}` — use your own address.
@@ -831,7 +863,7 @@ Should print `{"ok":true,"mode":"polling"}` — use your own address.
 Then confirm push is still wired up, which also tells you whether delivery is instant:
 
 ```bash
-curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://chatmany.abc123.workers.dev/admin/webhook
+curl -s -H "Authorization: Bearer YOUR_OWNER_TOKEN" https://dmslayer.abc123.workers.dev/admin/webhook
 ```
 
 Want `"subscribed": true`. If it's `false`, or the whole thing 404s, see
@@ -867,7 +899,7 @@ to confirm. Five minutes, and DMs land in a second or two instead of up to sixty
 - **Instant delivery does not depend on `MODE`.** If a callback URL is registered in your Meta app, pushed events are verified and handed to the engine the moment they arrive — whatever `MODE` is set to. Every request is authenticated against an `X-Hub-Signature-256` HMAC of your app secret; unsigned or mis-signed requests are rejected. Push also carries the postback payload, which polling never sees.
   - **`MODE` governs the cron, and only the cron.** `"polling"` polls every `POLL_INTERVAL_SECONDS` — `wrangler.toml` ships `60`, which is as fast as polling goes, since Cloudflare crons fire at most once a minute. (Delete the line and the code falls back to `90`; values below `30` are floored at `30`.) `"webhook"` drops the cron to the slower `WEBHOOK_RECONCILE_SECONDS` sweep (900 by default; `"off"` disables it). Neither setting decides whether pushed events are processed.
   - **The best setup for most people is `MODE = "polling"` *plus* a configured callback URL.** Push makes delivery instant; the 60-second poll sits underneath and catches anything a delivery drops. Webhooks are fire-and-forget — Meta retries a few times and then gives up, so a redeploy or a brief error loses those leads with nothing to notice. Running both is safe: the idempotency ledgers recognise an already-handled comment and skip it.
-  - Three things must line up before push works at all: the `WEBHOOK_VERIFY_TOKEN` secret, the callback URL registered in the Meta dashboard, and the **account** subscribed to the app. chatmany subscribes the account for you every time you connect Instagram, whatever `MODE` says; `GET /admin/webhook` reports whether it took.
+  - Three things must line up before push works at all: the `WEBHOOK_VERIFY_TOKEN` secret, the callback URL registered in the Meta dashboard, and the **account** subscribed to the app. dmSlayer subscribes the account for you every time you connect Instagram, whatever `MODE` says; `GET /admin/webhook` reports whether it took.
   - Switch `MODE` to `"webhook"` only once push is confirmed working, and know the tradeoff: it makes the safety net roughly 15× slower. If push ever breaks, you wait 15 minutes to find out instead of 60 seconds.
 - **Archiving is non-destructive.** It stops a campaign and hides it from the main list without deleting its history — unlike Delete, which cascades and removes everything permanently.
 

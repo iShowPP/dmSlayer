@@ -1,6 +1,6 @@
-# chatmany setup guide — working draft
+# dmSlayer setup guide — working draft
 
-Built live while Ryan reinstalls chatmany from scratch (2026-08-09) with a brand-new Meta app.
+Built live while Ryan reinstalls dmSlayer from scratch (2026-08-09) with a brand-new Meta app.
 Wording here is **approved verbatim** unless marked otherwise. Screenshot slots are marked
 `📸` only where Ryan confirmed one is needed.
 
@@ -20,7 +20,7 @@ Screenshot files live in `docs/img/` and are named by step, e.g. `1.4-use-case-c
 
 Then on the wizard:
 
-4. **App name**: `chatmany` — any name works, nobody but you sees it.
+4. **App name**: `dmSlayer` — any name works, nobody but you sees it.
 5. Check the contact email is filled in.
 6. Click **Next**.
 

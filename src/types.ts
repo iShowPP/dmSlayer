@@ -1,4 +1,4 @@
-// Shared types for chatmany.
+// Shared types for dmSlayer.
 
 /** Cloudflare bindings + vars available on the Worker environment. */
 export interface Env {
@@ -16,6 +16,14 @@ export interface Env {
   REDIRECT_URI: string;
 
   // secrets (wrangler secret put ...)
+  /** Set for apps on Meta's "Unified login": the Facebook Login for Business configuration id.
+   *  Its presence switches login and every API call to the facebook.com / graph.facebook.com flavor,
+   *  and APP_ID / APP_SECRET are then the META app pair (App settings -> Basic). */
+  CONFIG_ID?: string;
+  /** Optional manual connection: a token generated in the Meta app dashboard, and the account's
+   *  numeric id. See src/auth/manual.ts. */
+  IG_ACCESS_TOKEN?: string;
+  IG_USER_ID?: string;
   APP_ID: string;
   APP_SECRET: string;
   OWNER_TOKEN: string;

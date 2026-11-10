@@ -398,6 +398,117 @@ export async function eventCountsByType(
   return base;
 }
 
+// ---- DM stats (dashboard) ----
+
+export interface DmStats {
+  /** Every DM ever sent by this instance. */
+  all_time: number;
+  /** DMs sent since the viewer's local midnight. */
+  today: number;
+  /** DMs sent inside the selected range. */
+  range: number;
+  by_kind: { opening: number; follow_gate: number; email_ask: number; delivery: number; other: number };
+  /** One entry per local day in the range, oldest first, zero-filled. */
+  daily: Array<{ date: string; count: number }>;
+}
+
+/**
+ * Count outbound DMs from the send_claims ledger. Every DM the engine sends is claimed there first
+ * (key = `<kind>:<campaign_id>:<who>`), and the claim is removed only when Instagram definitively
+ * rejected the send — so the rows are the DMs that went out. This counts follow-gate and email-ask
+ * messages too, which the events table does not record.
+ *
+ * `tzOffsetSeconds` shifts day boundaries to the viewer's local time (seconds east of UTC).
+ */
+export async function dmStats(
+  db: D1Database,
+  campaignId: string | null,
+  days: number,
+  tzOffsetSeconds: number,
+): Promise<DmStats> {
+  const ts = now();
+  const localDay = Math.floor((ts + tzOffsetSeconds) / 86400);
+  const todayStart = localDay * 86400 - tzOffsetSeconds;
+  const firstDay = localDay - (days - 1);
+  const rangeStart = firstDay * 86400 - tzOffsetSeconds;
+  const scope = campaignId ? " AND key LIKE ?" : "";
+  const scopeBind = campaignId ? [`%:${campaignId}:%`] : [];
+
+  const totals = await db
+    .prepare(
+      `SELECT COUNT(*) AS all_time,
+              COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS today,
+              COALESCE(SUM(CASE WHEN created_at >= ? THEN 1 ELSE 0 END), 0) AS in_range
+       FROM send_claims WHERE 1 = 1${scope}`,
+    )
+    .bind(todayStart, rangeStart, ...scopeBind)
+    .first<{ all_time: number; today: number; in_range: number }>();
+
+  const rows = await db
+    .prepare(
+      `SELECT CAST((created_at + ?) / 86400 AS INTEGER) AS day,
+              substr(key, 1, instr(key, ':') - 1) AS kind,
+              COUNT(*) AS n
+       FROM send_claims WHERE created_at >= ?${scope} GROUP BY day, kind`,
+    )
+    .bind(tzOffsetSeconds, rangeStart, ...scopeBind)
+    .all<{ day: number; kind: string; n: number }>();
+
+  const by_kind = { opening: 0, follow_gate: 0, email_ask: 0, delivery: 0, other: 0 };
+  const perDay = new Map<number, number>();
+  for (const r of rows.results ?? []) {
+    // Resends share their original's prefix (e.g. email_ask_resend), so match on the start.
+    const kind = (["opening", "follow_gate", "email_ask", "delivery"] as const).find((k) => r.kind.startsWith(k));
+    by_kind[kind ?? "other"] += r.n;
+    perDay.set(r.day, (perDay.get(r.day) ?? 0) + r.n);
+  }
+  const daily: DmStats["daily"] = [];
+  for (let d = firstDay; d <= localDay; d++) {
+    daily.push({ date: new Date(d * 86400 * 1000).toISOString().slice(0, 10), count: perDay.get(d) ?? 0 });
+  }
+
+  return {
+    all_time: totals?.all_time ?? 0,
+    today: totals?.today ?? 0,
+    range: totals?.in_range ?? 0,
+    by_kind,
+    daily,
+  };
+}
+
+export interface RecentEventRow {
+  type: EventType;
+  campaign_id: string;
+  igsid: string | null;
+  username: string | null;
+  created_at: number;
+}
+
+/** Latest funnel events with the person's username where known (dashboard activity feed). */
+export async function recentEvents(db: D1Database, campaignId: string | null, limit = 12): Promise<RecentEventRow[]> {
+  const where = campaignId ? "WHERE e.campaign_id = ?" : "";
+  const binds = campaignId ? [campaignId, limit] : [limit];
+  const rows = await db
+    .prepare(
+      `SELECT e.type, e.campaign_id, e.igsid, e.created_at, c.username
+       FROM events e
+       LEFT JOIN conversations c ON c.igsid = e.igsid AND c.campaign_id = e.campaign_id
+       ${where} ORDER BY e.id DESC LIMIT ?`,
+    )
+    .bind(...binds)
+    .all<RecentEventRow>();
+  return rows.results ?? [];
+}
+
+/** Dashboard header counts: campaigns currently live, and distinct people ever reached. */
+export async function overviewCounts(db: D1Database): Promise<{ live_campaigns: number; people: number }> {
+  const live = await db
+    .prepare("SELECT COUNT(*) AS n FROM campaigns WHERE active = 1 AND archived_at IS NULL")
+    .first<{ n: number }>();
+  const people = await db.prepare("SELECT COUNT(DISTINCT igsid) AS n FROM conversations").first<{ n: number }>();
+  return { live_campaigns: live?.n ?? 0, people: people?.n ?? 0 };
+}
+
 // ---- contacts ----
 
 /** People who entered any campaign (Contacts page). Optionally scoped to one campaign. */

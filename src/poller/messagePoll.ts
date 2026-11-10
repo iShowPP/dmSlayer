@@ -46,7 +46,7 @@ export async function pollMessages(rt: Runtime, db: D1Database): Promise<void> {
     conversations = await rt.client.getConversations();
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.warn(`[chatmany] getConversations failed: ${msg}`);
+    console.warn(`[dmSlayer] getConversations failed: ${msg}`);
     await recordPollError(db, `getConversations: ${msg}`);
     // Deliberately leave the cursor alone: a transient read failure should be caught up on next
     // tick. MAX_LOOKBACK_SECONDS is what keeps that catch-up bounded if the outage is long.
@@ -86,7 +86,7 @@ export async function pollMessages(rt: Runtime, db: D1Database): Promise<void> {
           // while everyone else in this batch still gets processed.
           failed++;
           lastError = e instanceof Error ? e.message : String(e);
-          console.warn(`[chatmany] handleMessage failed for ${fromId}: ${lastError}`);
+          console.warn(`[dmSlayer] handleMessage failed for ${fromId}: ${lastError}`);
         }
       }
     }

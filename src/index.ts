@@ -1,4 +1,4 @@
-// chatmany Worker entry point. `fetch` serves the OAuth onboarding + owner API routes;
+// dmSlayer Worker entry point. `fetch` serves the OAuth onboarding + owner API routes;
 // `scheduled` runs the polling crons and the daily token refresh. The UI (Section 7A) will be
 // added later and served from this same Worker.
 
@@ -82,7 +82,7 @@ export default {
   async scheduled(event: ScheduledController, env: Env): Promise<void> {
     if (event.cron === REFRESH_CRON) {
       const result = await refreshTokenIfDue(env);
-      console.log(`[chatmany] token refresh: ${result.status}`);
+      console.log(`[dmSlayer] token refresh: ${result.status}`);
       return;
     }
     if (event.cron === POLL_CRON) {
@@ -113,11 +113,11 @@ async function runPoll(env: Env, interval: number): Promise<void> {
   try {
     await pollComments(rt, env.DB);
   } catch (e) {
-    console.warn(`[chatmany] pollComments failed: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[dmSlayer] pollComments failed: ${e instanceof Error ? e.message : e}`);
   }
   try {
     await pollMessages(rt, env.DB);
   } catch (e) {
-    console.warn(`[chatmany] pollMessages failed: ${e instanceof Error ? e.message : e}`);
+    console.warn(`[dmSlayer] pollMessages failed: ${e instanceof Error ? e.message : e}`);
   }
 }

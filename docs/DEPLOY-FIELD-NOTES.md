@@ -1,6 +1,6 @@
-# chatmany deploy — field notes from a real end-to-end install (Aug 17, 2026)
+# dmSlayer deploy — field notes from a real end-to-end install (Aug 17, 2026)
 
-A live-verified record of deploying chatmany from a fresh clone to a working Instagram
+A live-verified record of deploying dmSlayer from a fresh clone to a working Instagram
 connection, including every failure actually hit along the way and what each one turned out
 to mean. No secrets in this file.
 
@@ -11,11 +11,11 @@ below (T1–T6) are the part the README does not cover.
 ## The happy path this install followed (in the order that worked)
 
 1. **Cloudflare auth** — `npx wrangler login` (browser OAuth). One-time.
-2. **Create the database** — `npx wrangler d1 create chatmany` → paste the printed
+2. **Create the database** — `npx wrangler d1 create dmslayer` → paste the printed
    `database_id` into `wrangler.toml`.
 3. **Migrations** — `npm run db:migrate:remote` (applies every file in `schema/`).
 4. **First deploy** — `npx wrangler deploy`. This is where the workers.dev subdomain gets
-   claimed (see trap T1). The printed URL (`https://chatmany.<subdomain>.workers.dev`) is
+   claimed (see trap T1). The printed URL (`https://dmslayer.<subdomain>.workers.dev`) is
    `MY ADDRESS` for everything below.
 5. **Set `REDIRECT_URI`** in `wrangler.toml` to `MY ADDRESS/auth/callback`, redeploy.
 6. **Owner token** — invent one (`openssl rand -hex 32`), store with
@@ -46,7 +46,7 @@ below (T1–T6) are the part the README does not cover.
 ## Traps hit in this install (with the errors they actually produce)
 
 **T1 — workers.dev subdomain collision.** A fresh Cloudflare account has no workers.dev
-subdomain, wrangler auto-tries the worker name (`chatmany`) which is taken, and wrangler v4
+subdomain, wrangler auto-tries the worker name (`dmSlayer`) which is taken, and wrangler v4
 has no interactive way to pick another. Fix: register one via the dashboard onboarding page,
 or API: `PUT /accounts/{account_id}/workers/subdomain {"subdomain":"<name>"}`. Then deploy.
 Also: the new `*.workers.dev` hostname serves TLS errors (curl exit 35) for ~1 minute after
@@ -90,14 +90,14 @@ empty comment/message lists with no error. Publish before debugging anything els
 2. `/api/status` without token → 401; with owner token → `{"connected":false}` pre-connect
 3. After connect: `/api/status` → username, `expires_in_days: 60`
 4. `/api/media` → the account's real posts
-5. Create a campaign with a nonsense keyword (e.g. `CHATMANYTEST`) on a real post,
-   `POST /admin/poll`, watch `npx wrangler tail chatmany` — clean ticks
+5. Create a campaign with a nonsense keyword (e.g. `DMSLAYERTEST`) on a real post,
+   `POST /admin/poll`, watch `npx wrangler tail dmSlayer` — clean ticks
 6. Comment the keyword **from a second account** (own account cannot DM itself) → DM arrives
    → button tap → email ask → delivery. Dashboard counters advance at each stage.
 
 ## Debugging kit used
 
-- `npx wrangler tail chatmany --format pretty` — live logs incl. cron ticks
+- `npx wrangler tail dmSlayer --format pretty` — live logs incl. cron ticks
 - `POST MY_ADDRESS/admin/poll` (owner token) — poll on demand, no waiting for cron
-- `npx wrangler d1 execute chatmany --remote --json --command "SELECT ..."` — inspect state
+- `npx wrangler d1 execute dmSlayer --remote --json --command "SELECT ..."` — inspect state
 - Cloudflare secrets: use `wrangler secret bulk <file>.json` (values never on the CLI)

@@ -1,4 +1,4 @@
-/* chatmany UI — ManyChat-inspired. Blue #2d7ff9 accent, white cards on light-gray canvas,
+/* dmSlayer UI — ManyChat-inspired. Blue #2d7ff9 accent, white cards on light-gray canvas,
    generous rounded corners, sentence case, no emoji in chrome. */
 
 :root {
@@ -343,3 +343,37 @@ textarea { resize: vertical; min-height: 66px; }
 .gate-card p { color: var(--ink-soft); margin: 0 0 18px; }
 .gate-card .btn { display: inline-block; text-decoration: none; }
 .gate-hint { font-size: 12.5px; margin-top: 14px; margin-bottom: 0 !important; }
+
+/* ---------- dmSlayer dashboard ---------- */
+.acct { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.acct-av { width: 54px; height: 54px; border-radius: 50%; object-fit: cover; background: #eef1f6; flex: none; }
+.acct-main { flex: 1; min-width: 220px; }
+.acct-name { font-size: 17px; font-weight: 700; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 3px; }
+.acct-err { color: #d1435b; font-size: 12.5px; margin-top: 6px; overflow-wrap: anywhere; }
+.acct-stats { display: flex; gap: 26px; flex-wrap: wrap; }
+.acct-stats div { display: flex; flex-direction: column; }
+.acct-stats b { font-size: 19px; letter-spacing: -0.3px; font-variant-numeric: tabular-nums; }
+.acct-stats span { color: var(--ink-soft); font-size: 12px; }
+.dm-hero { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.metric.hero { padding: 20px 22px; }
+.metric.hero .m-label { margin: 0 0 6px; }
+.metric.hero .m-val { font-size: 40px; line-height: 1; }
+.metric.hero:first-child { background: linear-gradient(135deg, var(--blue-dark), var(--blue)); border-color: transparent; color: #fff; }
+.metric.hero:first-child .m-label { color: rgba(255, 255, 255, 0.9); }
+.metric .m-val { font-variant-numeric: tabular-nums; }
+.dash-grid { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 16px; }
+@media (max-width: 900px) { .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 0; } }
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 170px; border-bottom: 1px solid var(--line); }
+.bar-col { flex: 1; height: 100%; display: flex; align-items: flex-end; min-width: 0; }
+.bar-col:hover .bar { background: var(--blue-dark); }
+.bar { width: 100%; background: var(--blue); border-radius: 4px 4px 0 0; transition: height 0.3s; }
+.bars-axis { display: flex; justify-content: space-between; color: var(--ink-faint); font-size: 12px; margin-top: 6px; }
+.funnel-bar .fb-track.thin { height: 12px; }
+.act-row { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.act-row:first-of-type { border-top: 0; }
+.act-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.act-time { font-size: 12px; white-space: nowrap; }
+.act-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex: none; }
+.act-dot.delivered, .act-dot.follow_confirmed, .act-dot.email_captured { background: var(--green); }
+.act-dot.comment_matched { background: var(--amber); }
+.empty.small { padding: 22px 10px; font-size: 13px; }

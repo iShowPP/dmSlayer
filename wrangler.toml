@@ -1,5 +1,5 @@
-# chatmany — Cloudflare Worker config
-# After cloning: `wrangler d1 create chatmany`, paste the returned database_id below,
+# dmSlayer — Cloudflare Worker config
+# After cloning: `wrangler d1 create dmslayer`, paste the returned database_id below,
 # then `npm run db:migrate:remote`. Secrets are set with `wrangler secret put` (see .env.example).
 #
 # ⚠️ WHEN UPDATING TO A NEWER VERSION: MIGRATE THE DATABASE BEFORE YOU DEPLOY.
@@ -11,7 +11,7 @@
 #    with no error anywhere. Migrating first is always safe, because the version currently running
 #    simply ignores anything new. See "Updating an existing install" in the README.
 
-name = "chatmany"
+name = "dmslayer"
 main = "src/index.ts"
 compatibility_date = "2025-07-01"
 compatibility_flags = ["nodejs_compat"]
@@ -22,10 +22,10 @@ compatibility_flags = ["nodejs_compat"]
 [triggers]
 crons = ["* * * * *", "0 3 * * *"]
 
-# D1 database. Replace database_id with the id printed by `wrangler d1 create chatmany`.
+# D1 database. Replace database_id with the id printed by `wrangler d1 create dmslayer`.
 [[d1_databases]]
 binding = "DB"
-database_name = "chatmany"
+database_name = "dmslayer"
 database_id = "REPLACE-WITH-THE-ID-FROM-wrangler-d1-create"
 migrations_dir = "schema"
 
@@ -53,7 +53,7 @@ GRAPH_VERSION = "v23.0"
 #
 # Setting "webhook" before push is confirmed working is the classic way to break this: no events
 # arrive, the only thing still running is the 15-minute sweep, and every DM looks ~15 minutes late
-# as if chatmany were broken. Even once push IS working, "webhook" only makes your safety net 15x
+# as if dmSlayer were broken. Even once push IS working, "webhook" only makes your safety net 15x
 # slower — if push ever fails you wait 15 minutes to notice instead of 60 seconds.
 MODE = "polling"
 # Seconds between comment/message polls. The cron can only fire once a minute, and a tick is

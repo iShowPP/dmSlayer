@@ -1,10 +1,13 @@
-// JSON API for the chatmany web UI (Section 7A). All routes here are owner-gated by the caller
+// JSON API for the dmSlayer web UI (Section 7A). All routes here are owner-gated by the caller
 // (index.ts) via the OWNER_TOKEN. The UI is a pure config editor + monitor over the same tables
 // the engine uses — no new funnel behavior.
 
 import { validateCampaign } from "../config";
 import {
   deleteCampaign,
+  dmStats,
+  overviewCounts,
+  recentEvents,
   eventCountsByType,
   getAllCampaigns,
   getAuth,
@@ -15,6 +18,7 @@ import {
   upsertCampaign,
 } from "../db";
 import { buildRuntime } from "../runtime";
+import { ensureManualAuth, manualTokenError } from "../auth/manual";
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
 import { getCommentPollError } from "../poller/commentPoll";
 import type { Env } from "../types";
@@ -26,6 +30,8 @@ export async function handleApi(env: Env, req: Request, url: URL): Promise<Respo
 
   // Connection status + connected profile (drives the preview + settings screen).
   if (path === "/api/status" && method === "GET") return statusResponse(env);
+
+  if (path === "/api/account" && method === "GET") return accountResponse(env);
 
   // Live account media for the builder picker + preview.
   if (path === "/api/media" && method === "GET") return mediaResponse(env);
@@ -46,8 +52,9 @@ export async function handleApi(env: Env, req: Request, url: URL): Promise<Respo
 }
 
 async function statusResponse(env: Env): Promise<Response> {
+  await ensureManualAuth(env);
   const auth = await getAuth(env.DB);
-  if (!auth) return json({ connected: false });
+  if (!auth) return json({ connected: false, manual_token_error: await manualTokenError(env.DB) });
   // Poll health belongs HERE, not only on /auth/status: this is the endpoint the dashboard calls.
   // The signal added after the 2026-08-09 stall went onto /auth/status, which nothing in the UI
   // ever requests — so the one thing built to make a frozen poller visible was itself invisible.
@@ -80,6 +87,23 @@ async function mediaResponse(env: Env): Promise<Response> {
     return json({ media });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 502);
+  }
+}
+
+/** Live follower / post counts for the dashboard. Soft-fails: the tiles are optional. */
+async function accountResponse(env: Env): Promise<Response> {
+  const rt = await buildRuntime(env);
+  if (!rt) return json({ available: false });
+  try {
+    const s = await rt.client.getAccountStats();
+    return json({
+      available: true,
+      followers: s.followers_count ?? null,
+      following: s.follows_count ?? null,
+      posts: s.media_count ?? null,
+    });
+  } catch (e) {
+    return json({ available: false, error: e instanceof Error ? e.message : String(e) });
   }
 }
 
@@ -139,9 +163,20 @@ async function dashboard(env: Env, url: URL): Promise<Response> {
   const comments = counts.comment_matched;
   const pct = (n: number) => (comments > 0 ? Math.round((n / comments) * 100) : 0);
 
+  // Minutes east of UTC, as sent by the browser, so "today" and the daily chart follow local time.
+  const tzMin = Math.max(-840, Math.min(840, Number(url.searchParams.get("tz")) || 0));
+  const [dms, recent, overview] = await Promise.all([
+    dmStats(env.DB, campaignId, days, tzMin * 60),
+    recentEvents(env.DB, campaignId),
+    overviewCounts(env.DB),
+  ]);
+
   return json({
     campaign_id: campaignId,
     days,
+    dms,
+    recent,
+    overview,
     cards: {
       comments,
       sends: counts.opening_sent,
@@ -208,7 +243,7 @@ async function contactsCsv(env: Env, url: URL): Promise<Response> {
   return new Response(lines.join("\n"), {
     headers: {
       "content-type": "text/csv; charset=utf-8",
-      "content-disposition": `attachment; filename="chatmany-contacts.csv"`,
+      "content-disposition": `attachment; filename="dmslayer-contacts.csv"`,
     },
   });
 }

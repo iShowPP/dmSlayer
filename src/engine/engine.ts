@@ -72,7 +72,7 @@ function buttonTitle(raw: unknown, fallback: string): string {
   const candidate = typeof raw === "string" ? raw.trim() : "";
   const title = candidate || fallback;
   if (title.length <= MAX_BUTTON_TITLE) return title;
-  console.warn(`[chatmany] button label "${title}" exceeds ${MAX_BUTTON_TITLE} chars; trimming so Instagram accepts the send.`);
+  console.warn(`[dmSlayer] button label "${title}" exceeds ${MAX_BUTTON_TITLE} chars; trimming so Instagram accepts the send.`);
   return trimToLength(title, MAX_BUTTON_TITLE);
 }
 
@@ -413,7 +413,7 @@ export class Engine {
    */
   private async resendEmailAsk(campaign: Campaign, igsid: string, reasks: number): Promise<boolean> {
     if (emailReasksExhausted(reasks)) {
-      console.warn(`[chatmany] email re-ask cap reached for ${igsid} on ${campaign.campaign_id}; staying quiet.`);
+      console.warn(`[dmSlayer] email re-ask cap reached for ${igsid} on ${campaign.campaign_id}; staying quiet.`);
       return false;
     }
     const ok = await this.trySend(
@@ -541,7 +541,7 @@ export class Engine {
   private async trySend<T>(fn: () => Promise<T>, label: string, key?: string): Promise<boolean> {
     const claimKey = key ?? null;
     if (claimKey && !(await claimSend(this.db, claimKey))) {
-      console.warn(`[chatmany] skipping ${label}: already attempted, may have delivered (${claimKey})`);
+      console.warn(`[dmSlayer] skipping ${label}: already attempted, may have delivered (${claimKey})`);
       return true;
     }
     try {
@@ -554,11 +554,11 @@ export class Engine {
       const rejected = e instanceof InstagramApiError;
       if (rejected) {
         if (claimKey) await releaseSend(this.db, claimKey);
-        console.warn(`[chatmany] send failed (${label}), will retry: ${msg(e)}`);
+        console.warn(`[dmSlayer] send failed (${label}), will retry: ${msg(e)}`);
         return false;
       }
       console.warn(
-        `[chatmany] send outcome unknown (${label}): ${msg(e)} — treating as delivered so it is not sent twice`,
+        `[dmSlayer] send outcome unknown (${label}): ${msg(e)} — treating as delivered so it is not sent twice`,
       );
       return claimKey ? true : false;
     }

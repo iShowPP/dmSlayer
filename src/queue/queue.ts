@@ -50,7 +50,7 @@ export class SendQueue {
           throw e;
         }
         const backoff = this.baseBackoffMs * 2 ** attempt;
-        console.warn(`[chatmany] rate-limited, backing off ${backoff}ms (attempt ${attempt + 1})`);
+        console.warn(`[dmSlayer] rate-limited, backing off ${backoff}ms (attempt ${attempt + 1})`);
         await sleep(backoff);
         attempt++;
       }

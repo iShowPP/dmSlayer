@@ -5,6 +5,7 @@
 import { getAuth, saveAuth, now } from "../db";
 import { refreshLongLivedToken } from "../api/client";
 import type { Env } from "../types";
+import { tokenIsUnified } from "./manual";
 
 const DAY = 86400;
 const REFRESH_WHEN_WITHIN = 30 * DAY; // refresh once the token is within 30 days of expiry
@@ -25,10 +26,14 @@ export async function refreshTokenIfDue(env: Env): Promise<RefreshResult> {
   if (auth.expires_at <= ts) {
     // Past its life — cannot refresh, owner must re-connect. Loud warning (Section 9).
     console.warn(
-      `[chatmany] access token EXPIRED at ${new Date(auth.expires_at * 1000).toISOString()}; owner must reconnect Instagram.`,
+      `[dmSlayer] access token EXPIRED at ${new Date(auth.expires_at * 1000).toISOString()}; owner must reconnect Instagram.`,
     );
     return { status: "expired" };
   }
+
+  // Unified-login tokens are system-user tokens: the Instagram-login refresh endpoint does not
+  // apply to them. Their lifetime is whatever the Meta configuration set (default: never expires).
+  if (tokenIsUnified(auth.access_token)) return { status: "skipped", expiresAt: auth.expires_at };
 
   // Not yet within the refresh window — nothing to do this tick.
   if (auth.expires_at - ts > REFRESH_WHEN_WITHIN) {
@@ -45,11 +50,11 @@ export async function refreshTokenIfDue(env: Env): Promise<RefreshResult> {
     const { access_token, expires_in } = await refreshLongLivedToken(env.GRAPH_VERSION, auth.access_token);
     const expiresAt = now() + expires_in;
     await saveAuth(env.DB, { access_token, expires_at: expiresAt });
-    console.log(`[chatmany] token refreshed; new expiry ${new Date(expiresAt * 1000).toISOString()}`);
+    console.log(`[dmSlayer] token refreshed; new expiry ${new Date(expiresAt * 1000).toISOString()}`);
     return { status: "refreshed", expiresAt };
   } catch (e) {
     const detail = e instanceof Error ? e.message : String(e);
-    console.warn(`[chatmany] token refresh FAILED (${detail}); expiry ${new Date(auth.expires_at * 1000).toISOString()}`);
+    console.warn(`[dmSlayer] token refresh FAILED (${detail}); expiry ${new Date(auth.expires_at * 1000).toISOString()}`);
     return { status: "error", detail, expiresAt: auth.expires_at };
   }
 }

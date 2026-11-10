@@ -6,6 +6,7 @@ import { SendQueue } from "./queue/queue";
 import { Engine } from "./engine/engine";
 import { getAuth, now } from "./db";
 import type { AuthRow, Env } from "./types";
+import { ensureManualAuth, tokenIsUnified } from "./auth/manual";
 
 export interface Runtime {
   client: InstagramClient;
@@ -15,18 +16,25 @@ export interface Runtime {
   igUserId: string;
 }
 
+/** True when this instance is configured for a Unified-login Meta app (see Env.CONFIG_ID). */
+export function isUnified(env: Env): boolean {
+  const id = (env.CONFIG_ID ?? "").trim();
+  return id !== "" && !id.startsWith("PASTE");
+}
+
 export async function buildRuntime(env: Env): Promise<Runtime | null> {
+  await ensureManualAuth(env);
   const auth = await getAuth(env.DB);
   if (!auth) {
-    console.warn("[chatmany] no Instagram account connected; skipping.");
+    console.warn("[dmSlayer] no Instagram account connected; skipping.");
     return null;
   }
   if (auth.expires_at <= now()) {
-    console.warn("[chatmany] access token expired; owner must reconnect. Skipping.");
+    console.warn("[dmSlayer] access token expired; owner must reconnect. Skipping.");
     return null;
   }
   const igUserId = auth.ig_user_id ?? "me";
-  const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId);
+  const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId, tokenIsUnified(auth.access_token));
   const queue = new SendQueue();
   const engine = new Engine(env.DB, client, queue);
   return { client, queue, engine, auth, igUserId };

@@ -1,14 +1,14 @@
-/* chatmany web UI (Section 7A). Vanilla JS SPA served from the Worker. A single-owner token
+/* dmSlayer web UI (Section 7A). Vanilla JS SPA served from the Worker. A single-owner token
    (stored in localStorage) authorizes every /api call. The UI is a config editor + monitor over
    the same campaigns/events/conversations tables the engine uses — no new funnel behavior. */
 
-const TOKEN_KEY = "chatmany_token";
-const GH_URL = "https://github.com/";
+const TOKEN_KEY = "dmslayer_token";
+const GH_URL = "https://github.com/ryanlaiyanip-ctrl/chatmany";
 
 const store = {
   token: localStorage.getItem(TOKEN_KEY) || "",
   status: null,
-  page: "automations",
+  page: "dashboard",
   media: [],
   campaigns: [],
   automationStats: {}, // campaign_id -> { runs, ctr }
@@ -93,6 +93,14 @@ const ICON = {
 
 /* ---------------- boot ---------------- */
 async function boot() {
+  // Local sign-in link: "npm run local" prints a URL ending in #token=... so the owner token never
+  // has to be typed. A hash is not sent to the server; it is stored, then stripped from the address bar.
+  const hashTok = new URLSearchParams(location.hash.slice(1)).get("token");
+  if (hashTok) {
+    store.token = hashTok;
+    localStorage.setItem(TOKEN_KEY, hashTok);
+    history.replaceState(null, "", location.pathname);
+  }
   if (!store.token) return renderLogin();
   try {
     store.status = await api("/api/status");
@@ -104,12 +112,12 @@ async function boot() {
 
 /* ---------------- login / connect ---------------- */
 function renderLogin(err) {
-  document.title = "chatmany — sign in";
+  document.title = "dmSlayer — sign in";
   const app = $("#app");
   app.innerHTML = "";
   const card = el(`
     <div class="login-wrap"><div class="login-card">
-      <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">chatmany</span></div>
+      <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">dmSlayer</span></div>
       <h2>Owner sign in</h2>
       <p>Enter the owner token you set as the <code>OWNER_TOKEN</code> secret.</p>
       ${err ? `<div class="banner">${esc(err)}</div>` : ""}
@@ -138,18 +146,18 @@ function renderLogin(err) {
 
 /* ---------------- app shell ---------------- */
 function renderApp() {
-  document.title = "chatmany";
+  document.title = "dmSlayer";
   const s = store.status || {};
   const app = $("#app");
   app.innerHTML = "";
   const layout = el(`
     <div class="layout">
       <aside class="sidebar">
-        <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">chatmany</span></div>
+        <div class="brand"><span class="spark">${ICON.spark}</span><span class="name">dmSlayer</span></div>
         <nav class="nav">
+          <button class="nav-item" data-page="dashboard">${ICON.dashboard}<span>Dashboard</span></button>
           <button class="nav-item" data-page="automations">${ICON.automations}<span>Automations</span></button>
           <button class="nav-item" data-page="create">${ICON.create}<span>Create</span></button>
-          <button class="nav-item" data-page="dashboard">${ICON.dashboard}<span>Dashboard</span></button>
           <button class="nav-item" data-page="contacts">${ICON.contacts}<span>Contacts</span></button>
           <button class="nav-item" data-page="archive">${ICON.archive}<span>Archive</span></button>
         </nav>
@@ -161,7 +169,7 @@ function renderApp() {
               <span class="tag">self-hosted</span>
             </div>
           </div>
-          <a class="gh-link" href="${GH_URL}" target="_blank" rel="noopener">${ICON.github}<span>Star on GitHub</span></a>
+          <a class="gh-link" href="${GH_URL}" target="_blank" rel="noopener">${ICON.github}<span>Based on chatmany</span></a>
           <div class="legal-links">
             <a href="/privacy" target="_blank" rel="noopener">Privacy</a>
             <span>·</span>
@@ -214,7 +222,7 @@ function renderConnectGate(view, what) {
       <h2>Connect Instagram first</h2>
       <p>${esc(what)} need a connected Instagram Professional account — there's nothing for an automation to watch or send until one is linked.</p>
       <a class="btn primary" href="${authorizeUrl()}">Connect Instagram</a>
-      <p class="gate-hint">You'll approve access on Instagram's own page. chatmany never sees your password.</p>
+      <p class="gate-hint">You'll approve access on Instagram's own page. dmSlayer never sees your password.</p>
     </div></div>`;
 }
 
@@ -1025,27 +1033,125 @@ async function saveCampaign(activation) {
 }
 
 /* ================= DASHBOARD ================= */
-async function renderDashboard() {
+const EVENT_LABEL = {
+  comment_matched: "commented the keyword",
+  opening_sent: "was sent the opening DM",
+  button_clicked: "tapped the button",
+  follow_confirmed: "confirmed they followed",
+  email_captured: "shared their email",
+  delivered: "received the reward DM",
+};
+const DM_KINDS = [
+  ["opening", "Opening DMs"],
+  ["follow_gate", "Follow prompts"],
+  ["email_ask", "Email asks"],
+  ["delivery", "Reward DMs"],
+  ["other", "Other"],
+];
+const fmt = (n) => Number(n || 0).toLocaleString();
+let dashTimer = null;
+
+/** Connection + health pill for the account card. */
+function healthPill(s) {
+  if (!s.connected) return `<span class="pill wait">not connected</span>`;
+  if (s.token_expired) return `<span class="pill wait">token expired</span>`;
+  if (s.poll_age_seconds === null || s.poll_age_seconds === undefined) return `<span class="pill open">waiting for first check</span>`;
+  if (!s.poll_healthy) return `<span class="pill wait">checker stalled</span>`;
+  return `<span class="pill done">running</span>`;
+}
+
+async function renderDashboard(silent = false) {
   const view = $("#view");
-  try {
-    store.campaigns = (await api("/api/campaigns")).campaigns || [];
-  } catch {}
+  clearTimeout(dashTimer);
   const qs = new URLSearchParams();
   if (store.dashCampaign) qs.set("campaign_id", store.dashCampaign);
   qs.set("days", String(store.dashDays));
+  qs.set("tz", String(-new Date().getTimezoneOffset()));
   let data;
+  let account = { available: false };
   try {
-    data = await api("/api/dashboard?" + qs.toString());
+    const [st, camps, d, acct] = await Promise.all([
+      api("/api/status"),
+      api("/api/campaigns").catch(() => ({ campaigns: store.campaigns })),
+      api("/api/dashboard?" + qs.toString()),
+      api("/api/account").catch(() => ({ available: false })),
+    ]);
+    store.status = st;
+    store.campaigns = camps.campaigns || [];
+    data = d;
+    account = acct;
   } catch (e) {
-    view.innerHTML = connectBanner() + `<div class="empty">${esc(e.message)}</div>`;
+    if (!silent) view.innerHTML = connectBanner() + `<div class="empty">${esc(e.message)}</div>`;
+    scheduleDashRefresh();
     return;
   }
+  // The user may have navigated away while the requests were in flight.
+  if (store.page !== "dashboard") return;
+
+  const s = store.status || {};
   const c = data.cards;
+  const dms = data.dms;
   const card = (val, label, sub) => `<div class="metric"><div class="m-val">${val}</div><div class="m-label">${label}</div>${sub ? `<div class="m-sub">${sub}</div>` : ""}</div>`;
 
+  const checked =
+    s.poll_age_seconds === null || s.poll_age_seconds === undefined
+      ? ""
+      : ` · last checked ${s.poll_age_seconds < 60 ? "just now" : Math.round(s.poll_age_seconds / 60) + " min ago"}`;
+  const accountCard = s.connected
+    ? `<div class="card acct">
+        <img class="acct-av" src="${esc(s.profile_picture_url || "")}" alt="" onerror="this.style.visibility='hidden'"/>
+        <div class="acct-main">
+          <div class="acct-name">@${esc(s.username || "account")} ${healthPill(s)}</div>
+          <div class="muted">${esc((s.account_type || "Instagram").toLowerCase())} account · ${s.expires_in_days > 400 ? "token does not expire" : `token renews itself, ${s.expires_in_days} days left`}${checked}</div>
+          ${s.comment_poll_error || s.poll_error ? `<div class="acct-err">${esc(s.comment_poll_error || s.poll_error)}</div>` : ""}
+        </div>
+        <div class="acct-stats">
+          ${account.available && account.followers !== null ? `<div><b>${fmt(account.followers)}</b><span>followers</span></div>` : ""}
+          ${account.available && account.posts !== null ? `<div><b>${fmt(account.posts)}</b><span>posts</span></div>` : ""}
+          <div><b>${fmt(data.overview.live_campaigns)}</b><span>live automations</span></div>
+          <div><b>${fmt(data.overview.people)}</b><span>people reached</span></div>
+        </div>
+      </div>`
+    : `<div class="card acct">
+        <div class="acct-main">
+          <div class="acct-name">No Instagram account connected</div>
+          <div class="muted">Connect your Instagram Professional account to start sending DMs and see live numbers here.</div>
+          ${s.manual_token_error ? `<div class="acct-err">The token in .dev.vars was rejected: ${esc(s.manual_token_error)}</div>` : ""}
+        </div>
+        <a class="btn primary" href="${authorizeUrl()}">Connect Instagram</a>
+      </div>`;
+
+  const peak = Math.max(0, ...dms.daily.map((d) => d.count));
+  const dayLabel = (iso) => new Date(iso + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  const bars = dms.daily
+    .map(
+      (d) => `<div class="bar-col" title="${esc(dayLabel(d.date))}: ${d.count} DM${d.count === 1 ? "" : "s"}">
+        <div class="bar" style="height:${d.count ? Math.max(4, Math.round((d.count / peak) * 100)) : 0}%"></div></div>`,
+    )
+    .join("");
+  const kinds = DM_KINDS.filter(([k]) => k !== "other" || dms.by_kind.other > 0)
+    .map(([k, label]) => {
+      const n = dms.by_kind[k] || 0;
+      const pct = dms.range > 0 ? Math.round((n / dms.range) * 100) : 0;
+      return `<div class="funnel-bar"><div class="fb-top"><span>${label}</span><span class="muted">${fmt(n)} · ${pct}%</span></div>
+        <div class="fb-track thin"><div class="fb-fill" style="width:${n ? Math.max(2, pct) : 0}%;min-width:0"></div></div></div>`;
+    })
+    .join("");
+  const names = Object.fromEntries(store.campaigns.map((x) => [x.campaign_id, x.name || x.campaign_id]));
+  const recent = data.recent.length
+    ? data.recent
+        .map(
+          (r) => `<div class="act-row"><span class="act-dot ${esc(r.type)}"></span>
+            <div class="act-text"><b>${r.username ? "@" + esc(r.username) : "Someone"}</b> ${EVENT_LABEL[r.type] || esc(r.type)}
+              <span class="muted">· ${esc(names[r.campaign_id] || r.campaign_id)}</span></div>
+            <span class="muted act-time">${timeAgo(r.created_at)}</span></div>`,
+        )
+        .join("")
+    : `<div class="empty small">Nothing yet. Activity shows up here the moment someone comments your keyword.</div>`;
+
   view.innerHTML = `
-    ${connectBanner()}
-    <div class="page-head"><div><div class="page-title">Dashboard</div><div class="page-sub">Performance from logged funnel events.</div></div>
+    ${s.connected ? connectBanner() : ""}
+    <div class="page-head"><div><div class="page-title">Dashboard</div><div class="page-sub">Live numbers from your Instagram automations. Refreshes every 30 seconds.</div></div>
       <div class="toolbar">
         <div class="select-inline"><span class="muted">Campaign</span>
           <select id="dashcamp"><option value="">All campaigns</option>${store.campaigns.map((x) => `<option value="${esc(x.campaign_id)}" ${x.campaign_id === store.dashCampaign ? "selected" : ""}>${esc(x.name || x.campaign_id)}</option>`).join("")}</select></div>
@@ -1053,24 +1159,49 @@ async function renderDashboard() {
           <select id="dashdays">${[7, 30, 90].map((n) => `<option value="${n}" ${n === store.dashDays ? "selected" : ""}>Last ${n} days</option>`).join("")}</select></div>
       </div>
     </div>
-    <div class="metrics">
-      ${card(c.comments, "Comments")}
-      ${card(c.sends, "Opening DMs")}
-      ${card(c.clicks, "Clicks", c.ctr + "% of DMs")}
-      ${card(c.follows, "Follows")}
-      ${card(c.emails, "Emails")}
-      ${card(c.delivered, "Delivered")}
+    ${accountCard}
+    <div class="dm-hero">
+      <div class="metric hero"><div class="m-label">DMs sent today</div><div class="m-val">${fmt(dms.today)}</div></div>
+      <div class="metric hero"><div class="m-label">DMs sent, last ${data.days} days</div><div class="m-val">${fmt(dms.range)}</div></div>
+      <div class="metric hero"><div class="m-label">DMs sent, all time</div><div class="m-val">${fmt(dms.all_time)}</div></div>
     </div>
-    <div class="card">
-      <h3>Conversion funnel</h3>
-      <div class="hint">Percentages are relative to comments with the keyword.</div>
-      <div id="funnel"></div>
+    <div class="dash-grid">
+      <div class="card">
+        <h3>DMs sent per day</h3>
+        <div class="hint">Every message dmSlayer sent, by day. Busiest day: ${fmt(peak)}.</div>
+        <div class="bars">${bars}</div>
+        <div class="bars-axis"><span>${esc(dayLabel(dms.daily[0].date))}</span><span>Today</span></div>
+      </div>
+      <div class="card">
+        <h3>What was sent</h3>
+        <div class="hint">DMs in this range, by step of the funnel.</div>
+        ${kinds}
+      </div>
+    </div>
+    <div class="metrics">
+      ${card(fmt(c.comments), "Keyword comments")}
+      ${card(fmt(c.clicks), "Button taps", c.ctr + "% of opening DMs")}
+      ${card(fmt(c.follows), "Follows confirmed")}
+      ${card(fmt(c.emails), "Emails collected")}
+      ${card(fmt(c.delivered), "Rewards delivered")}
+    </div>
+    <div class="dash-grid">
+      <div class="card">
+        <h3>Conversion funnel</h3>
+        <div class="hint">Percentages are relative to comments with the keyword.</div>
+        <div id="funnel"></div>
+      </div>
+      <div class="card">
+        <h3>Recent activity</h3>
+        <div class="hint">The latest things people did.</div>
+        ${recent}
+      </div>
     </div>`;
 
   const funnel = $("#funnel");
   data.funnel.forEach((f) => {
     funnel.appendChild(
-      el(`<div class="funnel-bar"><div class="fb-top"><span>${f.label}</span><span class="muted">${f.value} · ${f.pct}%</span></div>
+      el(`<div class="funnel-bar"><div class="fb-top"><span>${f.label}</span><span class="muted">${fmt(f.value)} · ${f.pct}%</span></div>
         <div class="fb-track"><div class="fb-fill" style="width:${Math.max(2, f.pct)}%"></div></div></div>`),
     );
   });
@@ -1083,6 +1214,18 @@ async function renderDashboard() {
     store.dashDays = Number(e.target.value);
     renderDashboard();
   };
+  scheduleDashRefresh();
+}
+
+/** Keep the numbers live while the dashboard is open; never repaint under an open dropdown. */
+function scheduleDashRefresh() {
+  clearTimeout(dashTimer);
+  dashTimer = setTimeout(() => {
+    if (store.page !== "dashboard" || !store.token) return;
+    const a = document.activeElement;
+    if (a && a.tagName === "SELECT") return scheduleDashRefresh();
+    renderDashboard(true);
+  }, 30000);
 }
 
 /* ================= CONTACTS ================= */
@@ -1150,7 +1293,7 @@ async function renderContacts() {
       const blob = await res.blob();
       const a = document.createElement("a");
       a.href = URL.createObjectURL(blob);
-      a.download = "chatmany-contacts.csv";
+      a.download = "dmslayer-contacts.csv";
       document.body.appendChild(a);
       a.click();
       a.remove();

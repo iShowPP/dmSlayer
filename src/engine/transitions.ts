@@ -76,7 +76,7 @@ export function taggedPayload(kind: string, campaignId: string): string {
   // DM at all. Degrading to an untagged payload is strictly better: the press still arrives, and
   // the legacy fallback below advances every open funnel, exactly as it did before tagging existed.
   console.warn(
-    `[chatmany] campaign_id is too long to tag a button payload (${tagged.length} > ${MAX_PAYLOAD_LENGTH} chars); ` +
+    `[dmSlayer] campaign_id is too long to tag a button payload (${tagged.length} > ${MAX_PAYLOAD_LENGTH} chars); ` +
       `sending an untagged payload, so a press will advance every open funnel for this person.`,
   );
   return kind;
