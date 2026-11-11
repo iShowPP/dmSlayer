@@ -20,7 +20,7 @@ import {
 import { buildRuntime } from "../runtime";
 import { ensureManualAuth, manualTokenError } from "../auth/manual";
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
-import { getCommentPollError } from "../poller/commentPoll";
+import { getCommentPollError, getSendUsage, rateLimitedUntil } from "../poller/commentPoll";
 import { logRows, logSummary } from "../log";
 import { kvGet, kvSet } from "../db";
 import type { Env } from "../types";
@@ -85,6 +85,9 @@ async function statusResponse(env: Env): Promise<Response> {
     poll_healthy: pollAge !== null && pollAge < 600 && !commentPollError,
     poll_error: pollError,
     comment_poll_error: commentPollError,
+    // How much of Meta's hourly send allowance is used, and whether sending is paused for it.
+    send_usage: await getSendUsage(env.DB),
+    send_paused_until: await rateLimitedUntil(env.DB),
   });
 }
 

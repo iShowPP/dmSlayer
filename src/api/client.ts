@@ -90,6 +90,37 @@ export interface IgConversation {
   messages?: { data?: IgMessage[] };
 }
 
+/** Replies to other comments are not top-level comments; they are requested alongside, or a
+ *  keyword typed as a reply would never be seen. 50 is the most Instagram returns per level. */
+const COMMENT_FIELDS =
+  "id,text,timestamp,username,from{id,username},replies.limit(50){id,text,timestamp,username,from{id,username}}";
+
+interface CommentEdge {
+  data?: IgComment[];
+  paging?: { cursors?: { after?: string }; next?: string };
+}
+
+export interface CommentPage {
+  /** Top-level comments and their replies, flattened. */
+  comments: IgComment[];
+  /** Ids of the top-level comments on this page. */
+  topIds: string[];
+  /** Cursor for the next (older) page; undefined on the last page. */
+  after?: string;
+}
+
+function toCommentPage(edge: CommentEdge): CommentPage {
+  const comments: IgComment[] = [];
+  const topIds: string[] = [];
+  for (const c of edge.data ?? []) {
+    topIds.push(c.id);
+    comments.push(c);
+    for (const r of c.replies?.data ?? []) comments.push(r);
+  }
+  // `next` is only present when an older page exists; the cursor alone is always there.
+  return { comments, topIds, after: edge.paging?.next ? edge.paging.cursors?.after : undefined };
+}
+
 export class InstagramClient {
   constructor(
     private readonly accessToken: string,
@@ -105,6 +136,11 @@ export class InstagramClient {
   private get self(): string {
     return this.unified ? `/${this.igUserId}` : "/me";
   }
+
+  /** Latest rate-limit usage header Meta sent ("" until the first response). */
+  lastUsage = "";
+  /** How much of the app's hourly send allowance is used, in percent (100 = at the limit). Null until a send reports it. */
+  appUsagePercent: number | null = null;
 
   private base(path: string): string {
     return `${this.unified ? UNIFIED_GRAPH_HOST : GRAPH_HOST}/${this.version}${path.startsWith("/") ? path : `/${path}`}`;
@@ -151,11 +187,31 @@ export class InstagramClient {
     } catch {
       // non-JSON error body
     }
+    // Meta reports how much of each hourly allowance is used on every response. Keep the latest so
+    // a "request limit reached" error can say WHICH allowance, instead of leaving it to guesswork.
+    const usage = res.headers.get("x-business-use-case-usage") ?? res.headers.get("x-app-usage");
+    if (usage) this.lastUsage = usage.slice(0, 400);
+    // Sends are counted against the APP-level allowance, reported in its own header as percentages.
+    const appUsage = res.headers.get("x-app-usage");
+    if (appUsage) {
+      try {
+        const u = JSON.parse(appUsage) as { call_count?: number; total_time?: number; total_cputime?: number };
+        this.appUsagePercent = Math.max(u.call_count ?? 0, u.total_time ?? 0, u.total_cputime ?? 0);
+      } catch {
+        // header not JSON; ignore
+      }
+    }
     if (!res.ok) {
-      const err = (json as { error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string } })
+      const err = (json as { error?: { message?: string; code?: number; error_subcode?: number; fbtrace_id?: string; error_user_msg?: string; type?: string } })
         ?.error;
+      const base = err?.message ?? `HTTP ${res.status}`;
+      // Full detail for rate-limit errors: code, subcode, and the usage header at that moment.
+      const limited = res.status === 429 || (err?.code !== undefined && RATE_LIMIT_CODES.has(err.code));
+      const detail = limited
+        ? ` [http ${res.status}, code ${err?.code ?? "-"}, subcode ${err?.error_subcode ?? "-"}, type ${err?.type ?? "-"}${err?.error_user_msg ? `, note: ${err.error_user_msg}` : ""}; usage ${usage ?? "not reported"}]`
+        : "";
       throw new InstagramApiError(
-        err?.message ?? `HTTP ${res.status}`,
+        base + detail,
         res.status,
         err?.code,
         err?.error_subcode,
@@ -306,25 +362,30 @@ export class InstagramClient {
   }
 
   /**
-   * Comments for several posts in ONE request. Meta allows an app with a single connected account
-   * roughly 200 requests an hour in total — reads and sends together — so reading each post
-   * separately every minute used up nearly the whole allowance before a single DM was sent.
+   * One page of a post's comments, newest first, with replies folded in. Instagram returns at most
+   * 50 top-level comments per page whatever limit is asked for; `after` is the cursor for the next
+   * (older) page, absent on the last one.
    */
-  async getCommentsBatch(mediaIds: string[], limit = 100): Promise<Map<string, IgComment[]>> {
-    const inner = "id,text,timestamp,username,from{id,username},replies.limit(25){id,text,timestamp,username,from{id,username}}";
-    const res = await this.get<Record<string, { comments?: { data?: IgComment[] } }>>(`/`, {
-      ids: mediaIds.join(","),
-      fields: `comments.limit(${limit}){${inner}}`,
+  async getCommentsPage(mediaId: string, after?: string): Promise<CommentPage> {
+    const res = await this.get<CommentEdge>(`/${mediaId}/comments`, {
+      fields: COMMENT_FIELDS,
+      limit: "50",
+      ...(after ? { after } : {}),
     });
-    const out = new Map<string, IgComment[]>();
-    for (const id of mediaIds) {
-      const list: IgComment[] = [];
-      for (const c of res[id]?.comments?.data ?? []) {
-        list.push(c);
-        for (const r of c.replies?.data ?? []) list.push(r);
-      }
-      out.set(id, list);
-    }
+    return toCommentPage(res);
+  }
+
+  /**
+   * The first page of comments for several posts in ONE request, so watching more reels does not
+   * cost more requests per check.
+   */
+  async getCommentsBatch(mediaIds: string[]): Promise<Map<string, CommentPage>> {
+    const res = await this.get<Record<string, { comments?: CommentEdge }>>(`/`, {
+      ids: mediaIds.join(","),
+      fields: `comments.limit(50){${COMMENT_FIELDS}}`,
+    });
+    const out = new Map<string, CommentPage>();
+    for (const id of mediaIds) out.set(id, toCommentPage(res[id]?.comments ?? {}));
     return out;
   }
 

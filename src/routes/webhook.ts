@@ -16,6 +16,7 @@ import { WEBHOOK_FIELDS } from "../api/client";
 import { buildRuntime, toUnixSeconds } from "../runtime";
 import type { Env, NormalizedComment, NormalizedMessage } from "../types";
 import { json } from "./http";
+import { ingestPushedComment } from "../poller/commentPoll";
 
 /** GET /webhook — Meta subscription verification handshake. */
 export function handleWebhookVerify(env: Env, url: URL): Response {
@@ -132,9 +133,11 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
     for (const change of entry.changes ?? []) {
       if (change.field !== "comments") continue;
       const v = change.value;
-      const igsid = v.from?.id;
       const mediaId = v.media?.id;
-      if (!igsid || !mediaId || !v.id) continue;
+      if (!mediaId || !v.id) continue;
+      // A private reply only needs the comment id, so a comment without a commenter id is still
+      // answered; it gets a stand-in person id unique to that comment.
+      const igsid = v.from?.id ?? `anon:${v.id}`;
       const evt: NormalizedComment = {
         kind: "comment",
         comment_id: v.id,
@@ -144,7 +147,7 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
         media_id: mediaId,
         timestamp: toUnixSeconds(v.timestamp),
       };
-      await dispatch(`comment ${v.id}`, () => rt.engine.handleComment(evt));
+      await dispatch(`comment ${v.id}`, () => ingestPushedComment(rt, env.DB, evt));
     }
 
     // Messaging events (taps, replies, postbacks).

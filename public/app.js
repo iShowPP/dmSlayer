@@ -1208,7 +1208,7 @@ async function renderDashboard(silent = false) {
     ${readout("LNK", share(k.delivery), fmt(k.delivery) + " LINK DMS")}
     ${pairs([
       ["FOLLOWERS", account.available && account.followers != null ? fmt(account.followers) : "-"],
-      ["POSTS", account.available && account.posts != null ? fmt(account.posts) : "-"],
+      ["SEND LIMIT", s.send_usage ? Math.round(s.send_usage.percent) + "% USED" : "-"],
       ["CHECKED", s.poll_age_seconds == null ? "-" : s.poll_age_seconds < 60 ? s.poll_age_seconds + "S AGO" : Math.round(s.poll_age_seconds / 60) + "M AGO"],
     ])}`;
 

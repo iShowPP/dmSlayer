@@ -671,6 +671,8 @@ export class Engine {
 
   /** Set when Meta answers "request limit reached". The poller stops sending and backs off. */
   rateLimited = false;
+  /** Meta's own words for that refusal, for the dashboard. */
+  rateLimitDetail = "";
 
   private async trySend<T>(fn: () => Promise<T>, label: string, key?: string): Promise<boolean> {
     this.lastSendError = "";
@@ -688,7 +690,10 @@ export class Engine {
       // means we never learned the outcome, and the message may already be in the person's inbox.
       const rejected = e instanceof InstagramApiError;
       this.lastSendError = msg(e);
-      if (e instanceof InstagramApiError && e.isRateLimit) this.rateLimited = true;
+      if (e instanceof InstagramApiError && e.isRateLimit) {
+        this.rateLimited = true;
+        this.rateLimitDetail = msg(e).slice(0, 180);
+      }
       if (rejected) {
         if (claimKey) await releaseSend(this.db, claimKey);
         console.warn(`[dmSlayer] send failed (${label}), will retry: ${msg(e)}`);
