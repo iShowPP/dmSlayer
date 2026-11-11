@@ -141,6 +141,8 @@ export class InstagramClient {
   lastUsage = "";
   /** How much of the app's hourly send allowance is used, in percent (100 = at the limit). Null until a send reports it. */
   appUsagePercent: number | null = null;
+  /** Last "calls/time/cpu" percentages seen, per kind of request (messages, replies, ...). */
+  appUsageBy: Record<string, string> = {};
 
   private base(path: string): string {
     return `${this.unified ? UNIFIED_GRAPH_HOST : GRAPH_HOST}/${this.version}${path.startsWith("/") ? path : `/${path}`}`;
@@ -197,6 +199,10 @@ export class InstagramClient {
       try {
         const u = JSON.parse(appUsage) as { call_count?: number; total_time?: number; total_cputime?: number };
         this.appUsagePercent = Math.max(u.call_count ?? 0, u.total_time ?? 0, u.total_cputime ?? 0);
+        // Which kinds of request draw on the app allowance, and the raw figures: this is how we
+        // learn what the allowance is actually spent on instead of assuming.
+        const kind = new URL(res.url).pathname.split("/").pop() ?? "?";
+        this.appUsageBy[kind] = `${u.call_count ?? "-"}/${u.total_time ?? "-"}/${u.total_cputime ?? "-"}`;
       } catch {
         // header not JSON; ignore
       }

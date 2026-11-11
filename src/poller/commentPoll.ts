@@ -32,9 +32,9 @@ function cooldownSeconds(usagePercent: number | null): number {
   return 300;
 }
 
-async function recordUsage(db: D1Database, percent: number | null): Promise<void> {
+async function recordUsage(db: D1Database, percent: number | null, by?: Record<string, string>): Promise<void> {
   if (percent === null) return;
-  await kvSet(db, USAGE_KEY, JSON.stringify({ at: now(), percent }));
+  await kvSet(db, USAGE_KEY, JSON.stringify({ at: now(), percent, by: by ?? {} }));
 }
 
 /** Latest send-allowance usage Meta reported: { at, percent } or null. */
@@ -288,7 +288,7 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
       break;
     }
   }
-  await recordUsage(db, rt.client.appUsagePercent ?? null);
+  await recordUsage(db, rt.client.appUsagePercent ?? null, rt.client.appUsageBy);
 
   // Isolating each comment stops one failure starving the rest — but it also means a poll in which
   // EVERY comment fails now returns normally, where it used to throw. Surface it for the dashboard.
@@ -317,7 +317,9 @@ export async function ingestPushedComment(rt: Runtime, db: D1Database, evt: Norm
   const finished = await db.prepare("SELECT 1 FROM processed_comments WHERE comment_id = ?").bind(evt.comment_id).first();
   if (finished) return; // a repeat delivery of something already handled
   const liveSince = await getLiveSince(db);
-  const eligible = campaigns.filter((k) => evt.timestamp >= (liveSince.get(k.campaign_id) ?? 0));
+  // A push is a comment happening now, so the "not older than the automation" rule only has to
+  // stop a late re-delivery of an old one. Two minutes' grace covers clock differences with Meta.
+  const eligible = campaigns.filter((k) => evt.timestamp >= (liveSince.get(k.campaign_id) ?? 0) - 120);
   if (!(await loggedCommentIds(db, evt.media_id)).has(evt.comment_id)) {
     await logActivity(db, {
       kind: "comment", status: eligible.length === 0 ? "before_live" : "new", detail: evt.text,
