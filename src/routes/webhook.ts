@@ -17,6 +17,7 @@ import { buildRuntime, toUnixSeconds } from "../runtime";
 import type { Env, NormalizedComment, NormalizedMessage } from "../types";
 import { json } from "./http";
 import { ingestPushedComment } from "../poller/commentPoll";
+import { kvGet, kvSet, now } from "../db";
 
 /** GET /webhook — Meta subscription verification handshake. */
 export function handleWebhookVerify(env: Env, url: URL): Response {
@@ -106,6 +107,22 @@ export async function handleWebhookEvent(env: Env, req: Request): Promise<Respon
     body = JSON.parse(raw) as WebhookBody;
   } catch {
     return json({ error: "invalid JSON" }, 400);
+  }
+
+  // Record that Instagram is pushing to us at all, and what. Without this there is no way to tell
+  // "webhooks are set up but Meta sends nothing" from "webhooks work" — both look like silence.
+  try {
+    const entries = body.entry ?? [];
+    const comments = entries.reduce((n, e) => n + (e.changes ?? []).filter((c) => c.field === "comments").length, 0);
+    const messages = entries.reduce((n, e) => n + (e.messaging ?? []).length, 0);
+    const prev = JSON.parse((await kvGet(env.DB, "webhook_seen")) || "{}") as { comments?: number; messages?: number };
+    await kvSet(env.DB, "webhook_seen", JSON.stringify({
+      at: now(),
+      comments: (prev.comments ?? 0) + comments,
+      messages: (prev.messages ?? 0) + messages,
+    }));
+  } catch {
+    // diagnostics only
   }
 
   const rt = await buildRuntime(env);

@@ -88,6 +88,8 @@ async function statusResponse(env: Env): Promise<Response> {
     // How much of Meta's hourly send allowance is used, and whether sending is paused for it.
     send_usage: await getSendUsage(env.DB),
     send_paused_until: await rateLimitedUntil(env.DB),
+    // Whether Instagram has pushed anything to /webhook: { at, comments, messages } or null.
+    webhook_seen: JSON.parse((await kvGet(env.DB, "webhook_seen")) || "null"),
   });
 }
 
