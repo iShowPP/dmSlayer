@@ -699,6 +699,7 @@ function renderSections() {
       <div class="radio-row disabled"><span class="radio-dot"></span><div><div class="rr-title">Any post or reel</div><div class="rr-sub">Soon</div></div></div>
       <div class="media-grid" id="mediagrid">${mediaGrid}</div>
       ${seeMoreBtn}
+      <button class="btn ghost sm" id="mediaRefresh" style="margin-top:10px">Refresh posts</button>
     </div>
 
     <div class="card">
@@ -771,6 +772,18 @@ function wireSections() {
       renderPreview();
     };
   });
+  const refreshBtn = $("#mediaRefresh");
+  if (refreshBtn) {
+    refreshBtn.onclick = async () => {
+      try {
+        store.media = (await api("/api/media?fresh=1")).media || [];
+        toast("Posts refreshed");
+        renderSections();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+  }
   const seeMore = $("#mediaSeeMore");
   if (seeMore) {
     seeMore.onclick = () => {

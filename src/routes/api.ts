@@ -22,6 +22,7 @@ import { ensureManualAuth, manualTokenError } from "../auth/manual";
 import { getPollAgeSeconds, getPollError } from "../poller/messagePoll";
 import { getCommentPollError } from "../poller/commentPoll";
 import { logRows, logSummary } from "../log";
+import { kvGet, kvSet } from "../db";
 import type { Env } from "../types";
 import { json } from "./http";
 
@@ -35,7 +36,7 @@ export async function handleApi(env: Env, req: Request, url: URL): Promise<Respo
   if (path === "/api/account" && method === "GET") return accountResponse(env);
 
   // Live account media for the builder picker + preview.
-  if (path === "/api/media" && method === "GET") return mediaResponse(env);
+  if (path === "/api/media" && method === "GET") return mediaResponse(env, url);
 
   // Campaigns.
   if (path === "/api/campaigns" && method === "GET") return campaignsList(env, url);
@@ -87,11 +88,32 @@ async function statusResponse(env: Env): Promise<Response> {
   });
 }
 
-async function mediaResponse(env: Env): Promise<Response> {
+/**
+ * Cache a Meta read in the kv table. Every request to Meta counts against the same small hourly
+ * allowance the DMs need, so pages that merely display data must not ask again on every refresh.
+ */
+async function cachedRead<T>(env: Env, key: string, ttlSeconds: number, read: () => Promise<T>): Promise<T> {
+  const raw = await kvGet(env.DB, key);
+  if (raw) {
+    try {
+      const hit = JSON.parse(raw) as { at: number; data: T };
+      if (now() - hit.at < ttlSeconds) return hit.data;
+    } catch {
+      // fall through and refresh
+    }
+  }
+  const data = await read();
+  await kvSet(env.DB, key, JSON.stringify({ at: now(), data }));
+  return data;
+}
+
+async function mediaResponse(env: Env, url: URL): Promise<Response> {
   const rt = await buildRuntime(env);
   if (!rt) return json({ error: "not connected" }, 400);
   try {
-    const media = await rt.client.getMedia(30);
+    // ?fresh=1 (the builder's "refresh posts" key) bypasses the cache to pick up a new reel.
+    const ttl = url.searchParams.get("fresh") === "1" ? 0 : 600;
+    const media = await cachedRead(env, "cache_media", ttl, () => rt.client.getMedia(30));
     return json({ media });
   } catch (e) {
     return json({ error: e instanceof Error ? e.message : String(e) }, 502);
@@ -103,7 +125,7 @@ async function accountResponse(env: Env): Promise<Response> {
   const rt = await buildRuntime(env);
   if (!rt) return json({ available: false });
   try {
-    const s = await rt.client.getAccountStats();
+    const s = await cachedRead(env, "cache_account", 1800, () => rt.client.getAccountStats());
     return json({
       available: true,
       followers: s.followers_count ?? null,

@@ -405,14 +405,14 @@ describe("4 · the same person, more than once", () => {
     await sim.campaign(campaign({ campaign_id: "c2", media_id: "reel_1", keywords: ["GUIDE"], reward: { type: "link", value: "https://example.com/other" } }));
 
     await sim.comments("hal", "send me the LINK and the GUIDE");
-    sim.note(`One comment → ${sim.received()} opening DMs, back to back, from a single comment.`);
-    expect(sim.received()).toBe(2);
+    sim.note(`One comment → ${sim.received()} opening DM. One comment is answered once, by the first matching automation.`);
+    expect(sim.received()).toBe(1);
 
     await sim.taps("hal", "Send it to me", "OPENING_TAP:c1");
     sim.note(`Then one PRESS → ${sim.received()} DMs total.`);
     expect(await sim.state("hal", "c1")).toBe("DONE");
-    expect(await sim.state("hal", "c2")).toBe("AWAITING_TAP");
-    sim.note("Only the funnel whose button they actually pressed. The other still waits for its own.");
+    expect(await sim.state("hal", "c2")).toBeNull();
+    sim.note("The second automation never opened a funnel for this comment.");
   });
 
   it("★ 4E with Instagram's real once-per-comment rule applied", async () => {
@@ -429,15 +429,12 @@ describe("4 · the same person, more than once", () => {
     expect(await sim.state("ida", "c2")).toBeNull();
     sim.note("c1 got its DM. c2's was refused — correct so far, nothing was delivered twice.");
 
-    // A rejection is treated as retryable, so the comment is deliberately left unprocessed.
-    expect(await isCommentProcessed(sim.db, id)).toBe(false);
+    // The second automation is never attempted for an already-answered comment, so nothing is
+    // refused and the comment is finished. (It used to be retried on every poll, forever.)
+    expect(await isCommentProcessed(sim.db, id)).toBe(true);
 
     for (let i = 0; i < 3; i++) await sim.repoll("ida", "send me the LINK and the GUIDE", id);
-
-    sim.note(`After 3 more polls, comment still unprocessed: ${!(await isCommentProcessed(sim.db, id))}`);
-    sim.note("⚠️  This never resolves. Instagram will refuse that second private reply forever, so the");
-    sim.note("   comment is retried on EVERY poll, indefinitely — a permanent hot loop burning API calls.");
-    expect(await isCommentProcessed(sim.db, id)).toBe(false);
+    expect(await isCommentProcessed(sim.db, id)).toBe(true);
     expect(await sim.state("ida", "c2")).toBeNull();
   });
 });

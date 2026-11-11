@@ -13,10 +13,33 @@ import { logActivity, loggedCommentIds } from "../log";
 const OPENING_CAP_PER_HOUR = 180;
 
 const ERROR_KEY = "last_comment_poll_error";
+const COOLDOWN_KEY = "rate_limit_until";
+/** How long to stop calling Meta after it says the request limit is reached. */
+const COOLDOWN_SECONDS = 300;
+
+async function startCooldown(db: D1Database, what: string): Promise<void> {
+  const until = now() + COOLDOWN_SECONDS;
+  await kvSet(db, COOLDOWN_KEY, String(until));
+  await kvSet(db, ERROR_KEY, JSON.stringify({
+    at: now(),
+    message: `Meta request limit reached (${what}). Paused until ${new Date(until * 1000).toISOString().slice(11, 16)} UTC; unanswered comments are retried then.`,
+  }));
+  console.warn(`[dmSlayer] Meta request limit reached (${what}); pausing ${COOLDOWN_SECONDS}s.`);
+}
+
+/** Unix seconds until which polling is paused for Meta's request limit (0 = not paused). */
+export async function rateLimitedUntil(db: D1Database): Promise<number> {
+  return Number(await kvGet(db, COOLDOWN_KEY)) || 0;
+}
+
+function isRateLimit(e: unknown): boolean {
+  return Boolean(e && typeof e === "object" && (e as { isRateLimit?: boolean }).isRateLimit);
+}
 
 export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
   const campaigns = await getActiveCampaigns(db);
   if (campaigns.length === 0) return;
+  if ((await rateLimitedUntil(db)) > now()) return; // backing off; every call now would be wasted
 
   const sinceHour = now() - 3600;
   const openingsThisHour = await countEventsGlobal(db, "opening_sent", sinceHour);
@@ -34,11 +57,22 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
   let handled = 0;
   let failed = 0;
   let lastError = "";
-  for (const mediaId of mediaIds) {
+  // All posts in one request where the client supports it (see getCommentsBatch for why).
+  let batch: Map<string, Awaited<ReturnType<typeof rt.client.getComments>>> | null = null;
+  if (mediaIds.length > 1 && typeof rt.client.getCommentsBatch === "function") {
+    try {
+      batch = await rt.client.getCommentsBatch(mediaIds);
+    } catch (e) {
+      if (isRateLimit(e)) return startCooldown(db, "reading comments");
+      console.warn(`[dmSlayer] batched comment read failed, reading posts one by one: ${e instanceof Error ? e.message : e}`);
+    }
+  }
+  outer: for (const mediaId of mediaIds) {
     let comments;
     try {
-      comments = await rt.client.getComments(mediaId);
+      comments = batch?.get(mediaId) ?? (await rt.client.getComments(mediaId));
     } catch (e) {
+      if (isRateLimit(e)) return startCooldown(db, "reading comments");
       console.warn(`[dmSlayer] getComments(${mediaId}) failed: ${e instanceof Error ? e.message : e}`);
       continue;
     }
@@ -87,6 +121,7 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
         lastError = e instanceof Error ? e.message : String(e);
         console.warn(`[dmSlayer] handleComment failed for ${c.id} on ${mediaId}: ${lastError}`);
       }
+      if (rt.engine.rateLimited) break outer;
     }
   }
 
@@ -94,6 +129,7 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
   // EVERY comment fails now returns normally, where it used to throw. Without this the dashboard
   // would read healthy while no lead had been answered for hours, which is the exact failure mode
   // the message poll's health signal was added for. Surface it the same way.
+  if (rt.engine.rateLimited) return startCooldown(db, "sending");
   if (failed > 0) {
     await kvSet(db, ERROR_KEY, JSON.stringify({
       at: now(),

@@ -305,6 +305,29 @@ export class InstagramClient {
     return out;
   }
 
+  /**
+   * Comments for several posts in ONE request. Meta allows an app with a single connected account
+   * roughly 200 requests an hour in total — reads and sends together — so reading each post
+   * separately every minute used up nearly the whole allowance before a single DM was sent.
+   */
+  async getCommentsBatch(mediaIds: string[], limit = 100): Promise<Map<string, IgComment[]>> {
+    const inner = "id,text,timestamp,username,from{id,username},replies.limit(25){id,text,timestamp,username,from{id,username}}";
+    const res = await this.get<Record<string, { comments?: { data?: IgComment[] } }>>(`/`, {
+      ids: mediaIds.join(","),
+      fields: `comments.limit(${limit}){${inner}}`,
+    });
+    const out = new Map<string, IgComment[]>();
+    for (const id of mediaIds) {
+      const list: IgComment[] = [];
+      for (const c of res[id]?.comments?.data ?? []) {
+        list.push(c);
+        for (const r of c.replies?.data ?? []) list.push(r);
+      }
+      out.set(id, list);
+    }
+    return out;
+  }
+
   /** Read recent conversations + their messages (how inbound taps/replies arrive without webhooks). */
   async getConversations(limit = 20): Promise<IgConversation[]> {
     const res = await this.get<{ data?: IgConversation[] }>(`/${this.igUserId}/conversations`, {

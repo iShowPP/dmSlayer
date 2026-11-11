@@ -35,7 +35,9 @@ export async function buildRuntime(env: Env): Promise<Runtime | null> {
   }
   const igUserId = auth.ig_user_id ?? "me";
   const client = new InstagramClient(auth.access_token, env.GRAPH_VERSION, igUserId, tokenIsUnified(auth.access_token));
-  const queue = new SendQueue();
+  // No in-place retries: a rate-limited request still counts against Meta's hourly allowance, so
+  // retrying it three more times on the spot only digs the hole deeper. The poll retries later.
+  const queue = new SendQueue({ maxRetries: 0 });
   const engine = new Engine(env.DB, client, queue);
   return { client, queue, engine, auth, igUserId };
 }

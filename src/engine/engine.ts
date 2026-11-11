@@ -149,8 +149,19 @@ export class Engine {
     // A retryable opening-send failure leaves the comment unprocessed so the next poll retries it.
     let pendingRetry = false;
 
+    // One comment, one DM: if two automations watch the same post with the same keyword, only
+    // the first one answers this comment.
+    let answered = false;
+
     for (const campaign of campaigns) {
       if (!commentTriggers(evt.text, campaign.keywords, campaign.exclude)) continue;
+      if (answered) continue;
+      // Out of request allowance: leave this comment for the next poll instead of burning more.
+      if (this.rateLimited) {
+        pendingRetry = true;
+        break;
+      }
+      answered = true;
       matchedCampaignId = campaign.campaign_id;
       await this.noteComment(evt, "matched", campaign.campaign_id);
 
@@ -658,6 +669,9 @@ export class Engine {
   /** Why the most recent failed send was refused ("" after a success). */
   private lastSendError = "";
 
+  /** Set when Meta answers "request limit reached". The poller stops sending and backs off. */
+  rateLimited = false;
+
   private async trySend<T>(fn: () => Promise<T>, label: string, key?: string): Promise<boolean> {
     this.lastSendError = "";
     const claimKey = key ?? null;
@@ -674,6 +688,7 @@ export class Engine {
       // means we never learned the outcome, and the message may already be in the person's inbox.
       const rejected = e instanceof InstagramApiError;
       this.lastSendError = msg(e);
+      if (e instanceof InstagramApiError && e.isRateLimit) this.rateLimited = true;
       if (rejected) {
         if (claimKey) await releaseSend(this.db, claimKey);
         console.warn(`[dmSlayer] send failed (${label}), will retry: ${msg(e)}`);
