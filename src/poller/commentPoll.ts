@@ -209,7 +209,7 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
       `SELECT comment_id, igsid, username, detail, media_id, at FROM activity_log
        WHERE kind = 'comment' AND status IN ('new', 'matched') AND at > ?
          AND comment_id NOT IN (SELECT comment_id FROM processed_comments)
-       ORDER BY at ASC LIMIT 200`,
+       ORDER BY at ASC LIMIT 600`,
     )
     .bind(now() - 7 * 86400) // Instagram accepts a private reply for 7 days after the comment
     .all<PendingRow>();
@@ -228,8 +228,26 @@ export async function pollComments(rt: Runtime, db: D1Database): Promise<void> {
 
   if (sendPaused) return; // everything is logged; answers go out when sending resumes
 
-  // ---- 3. answer, longest-waiting first ----
+  // ---- 3. answer ----
+  // Order matters when Meta's allowance is smaller than the demand. Comments never tried come
+  // before retries, so one that keeps failing can never hold up the line. Among the untried, turns
+  // alternate between the newest (a DM that arrives while they are still looking) and the
+  // longest-waiting (so the backlog always drains too).
+  const tried = new Set(
+    ((await db.prepare("SELECT comment_id FROM activity_log WHERE kind = 'dm' AND status = 'failed' AND n > 0").all<{ comment_id: string }>()).results ?? [])
+      .map((r) => r.comment_id),
+  );
   queue.sort((a, b) => a.evt.timestamp - b.evt.timestamp);
+  const fresh = queue.filter((q) => !tried.has(q.evt.comment_id));
+  const retries = queue.filter((q) => tried.has(q.evt.comment_id));
+  const ordered: typeof queue = [];
+  for (let lo = 0, hi = fresh.length - 1; lo <= hi; ) {
+    ordered.push(fresh[hi--]!);
+    if (lo <= hi) ordered.push(fresh[lo++]!);
+  }
+  ordered.push(...retries);
+  queue.length = 0;
+  queue.push(...ordered);
   let handled = 0;
   let failed = 0;
   let lastError = "";
@@ -310,6 +328,10 @@ export async function ingestPushedComment(rt: Runtime, db: D1Database, evt: Norm
   if (eligible.length === 0) return;
   // Sending paused for the request limit: it is logged, and the poll answers it when sends resume.
   if ((await rateLimitedUntil(db)) > now()) return;
+  // Allowance nearly used up (as of the last send, if recent): leave it to the poll's queue, which
+  // spends what is left in a fair order, rather than letting pushes run it into the wall.
+  const usage = await getSendUsage(db);
+  if (usage && now() - usage.at < 600 && usage.percent >= USAGE_SOFT_STOP) return;
   await rt.engine.handleComment(evt, eligible);
   await recordUsage(db, rt.client?.appUsagePercent ?? null);
   if (rt.engine.rateLimited) {

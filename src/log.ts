@@ -19,6 +19,8 @@ export interface LogEntry {
   dedupe?: string | null;
   /** Unix seconds; defaults to now. Comments use the time Instagram says they were posted. */
   at?: number;
+  /** False = update the row without counting it as another attempt (`n` stays as it was). */
+  count?: boolean;
 }
 
 export async function logActivity(db: D1Database, e: LogEntry): Promise<void> {
@@ -34,7 +36,7 @@ export async function logActivity(db: D1Database, e: LogEntry): Promise<void> {
            detail = COALESCE(excluded.detail, activity_log.detail),
            campaign_id = COALESCE(excluded.campaign_id, activity_log.campaign_id),
            username = COALESCE(excluded.username, activity_log.username),
-           n = activity_log.n + (CASE WHEN excluded.kind = 'comment' THEN 0 ELSE 1 END)`,
+           n = activity_log.n + (CASE WHEN excluded.kind = 'comment' THEN 0 ELSE ?11 END)`,
       )
       .bind(
         e.at ?? now(),
@@ -47,10 +49,21 @@ export async function logActivity(db: D1Database, e: LogEntry): Promise<void> {
         e.status,
         e.detail ? e.detail.slice(0, 500) : null,
         e.dedupe ?? null,
+        e.count === false ? 0 : 1,
       )
       .run();
   } catch (err) {
     console.warn(`[dmSlayer] activity log write failed: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
+/** How many counted attempts the row with this dedupe key has had (0 if there is none). */
+export async function attemptsFor(db: D1Database, dedupe: string): Promise<number> {
+  try {
+    const row = await db.prepare("SELECT n FROM activity_log WHERE dedupe = ?").bind(dedupe).first<{ n: number }>();
+    return row?.n ?? 0;
+  } catch {
+    return 0;
   }
 }
 

@@ -3,7 +3,7 @@
 // side-effects (DMs, public actions) run idempotently via the ledgers, so re-polls and webhook
 // retries never double-message anyone.
 
-import { logActivity, type LogKind } from "../log";
+import { attemptsFor, logActivity, type LogKind } from "../log";
 import type { InstagramClient } from "../api/client";
 import type { SendQueue } from "../queue/queue";
 import type {
@@ -204,39 +204,44 @@ export class Engine {
   }
 
   /**
-   * A DM send just failed. Returns true when Instagram will never accept a private reply to this
-   * comment (the commenter's settings, a deleted comment, or one already answered by hand): retrying
-   * forever only burns API calls, so the comment is answered publicly instead and not retried.
-   * Returns false for any other failure, which the caller retries on the next poll.
+   * A DM send just failed. Decide what kind of failure it was, because each needs the opposite
+   * treatment and getting it wrong is expensive: Meta's send allowance for an app like this is
+   * small, a refused request still uses it up, and a comment that is retried forever sits at the
+   * head of the queue and starves everyone behind it.
+   *
+   *  - request limit reached:  nothing wrong with the comment. Retry later; not counted as a try.
+   *  - already has a reply:    another tool privately replied first. They HAVE the DM. Done.
+   *  - can never be replied:   commenter's settings, deleted comment, vanished account. Done, with
+   *                            a public reply so the comment is not left unanswered.
+   *  - anything else:          Instagram hiccup. Up to MAX_DM_TRIES tries, then treated as "never".
+   *
+   * Returns true when the comment is finished, false when it should be retried on a later check.
    */
   private async dmRefused(campaign: Campaign, evt: NormalizedComment): Promise<boolean> {
     const why = this.lastSendError;
-    if (!/invalid for a private reply/i.test(why)) {
-      await this.note(campaign, evt, "dm", "failed", `${why} (will retry)`, `dm:${evt.comment_id}`);
+    const key = `dm:${evt.comment_id}`;
+
+    if (this.rateLimited) {
+      await logActivity(this.db, {
+        kind: "dm", status: "failed", detail: "waiting: Meta's send limit is reached (will retry)", dedupe: key, count: false,
+        media_id: campaign.media_id, campaign_id: campaign.campaign_id, comment_id: evt.comment_id, igsid: evt.igsid, username: evt.username ?? null,
+      });
       return false;
     }
-    // Second route: an ordinary DM to the person. Instagram only allows it if they have messaged
-    // this account recently, so it often fails too — but when it works they still get the link.
-    if (campaign.direct_delivery && !evt.igsid.startsWith("anon:")) {
-      const text = deliveryText(campaign);
-      const direct = await this.trySend(
-        () => this.client.sendText(evt.igsid, text),
-        "direct_dm_fallback",
-        `fallbackdm:${campaign.campaign_id}:${evt.comment_id}`,
-      );
-      if (direct) {
-        if (await createConversation(this.db, evt.igsid, campaign.campaign_id, evt.username ?? null, "DONE")) {
-          await logEvent(this.db, campaign.campaign_id, "comment_matched", evt.igsid);
-          await logEvent(this.db, campaign.campaign_id, "opening_sent", evt.igsid);
-          await logEvent(this.db, campaign.campaign_id, "delivered", evt.igsid);
-        }
-        await this.note(campaign, evt, "link", "sent", `${text} (sent as a normal DM; the private reply was refused)`, `dm:${evt.comment_id}`);
-        await this.runPublicActions(campaign, evt);
-        return true;
-      }
+
+    if (/already has a reply/i.test(why)) {
+      await this.note(campaign, evt, "dm", "skipped", "another tool already sent this comment its private reply", key);
+      return true;
     }
-    console.warn(`[dmSlayer] cannot DM @${evt.username ?? evt.igsid}: Instagram does not allow a private reply to this comment.`);
-    await this.note(campaign, evt, "dm", "blocked", why, `dm:${evt.comment_id}`);
+
+    const never = /invalid for a private reply|user cannot be found|archived or deleted this conversation|thread does not exist/i.test(why);
+    if (!never) {
+      await this.note(campaign, evt, "dm", "failed", `${why} (will retry)`, key);
+      if ((await attemptsFor(this.db, key)) < MAX_DM_TRIES) return false;
+    }
+
+    console.warn(`[dmSlayer] cannot DM @${evt.username ?? evt.igsid}: ${why}`);
+    await this.note(campaign, evt, "dm", "blocked", never ? why : `gave up after ${MAX_DM_TRIES} tries: ${why}`, key);
     // The keyword comment still gets an answer: a public reply, unless one was already posted.
     if (await claimCommentAction(this.db, evt.comment_id, "public_reply")) {
       const ok = await this.trySend(() => this.client.replyToComment(evt.comment_id, DM_BLOCKED_REPLY), "fallback_reply");
@@ -719,7 +724,10 @@ function deliveryText(campaign: Campaign): string {
 }
 
 /** Public reply used when Instagram refuses the DM, so the keyword comment is still answered. */
-const DM_BLOCKED_REPLY = "Couldn't DM you 🙏 send us a message and we'll share it right away!";
+const DM_BLOCKED_REPLY = "If the DM didn't reach you, message us and we'll send it 🙌";
+
+/** How many times a DM is tried for one comment when Instagram fails for no stated reason. */
+const MAX_DM_TRIES = 3;
 
 /** Activity-log kind for each funnel step a person takes. */
 const STEP_KIND: Partial<Record<EventType, LogKind>> = {

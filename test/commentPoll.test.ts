@@ -93,7 +93,8 @@ describe("comment poll", () => {
       [cmt("a1", "ann", "tiktok", 10)],
     ]);
     await poll();
-    expect(client.sent.map((s) => s.commentId)).toEqual(["a1", "a2", "a3"]); // all three, oldest first
+    // all three; turns alternate newest, longest-waiting, newest...
+    expect(client.sent.map((s) => s.commentId)).toEqual(["a3", "a1", "a2"]);
   });
 
   it("stops paging at the first page that holds a comment it already knows", async () => {
@@ -156,6 +157,68 @@ describe("comment poll", () => {
     expect(client.sent.map((s) => s.commentId)).toEqual(["a2"]); // only the one nobody answered
     await poll();
     expect(client.sent).toHaveLength(1); // and it stays that way
+  });
+
+  it("another tool's private reply ends it: no retry, no public reply", async () => {
+    const { db, client, poll } = await setup();
+    client.pages.set("reel_1", [[cmt("a1", "ann", "tiktok", 10)]]);
+    let attempts = 0;
+    client.privateReplyText = async () => {
+      attempts++;
+      throw new InstagramApiError("(#-1) The comment that you are trying to reply to already has a reply.", 400, -1);
+    };
+    await poll();
+    await poll();
+    expect(attempts).toBe(1);
+    expect(client.replies).toHaveLength(0);
+    const row = await db.prepare("SELECT status FROM activity_log WHERE dedupe = 'dm:a1'").first<{ status: string }>();
+    expect(row?.status).toBe("skipped");
+  });
+
+  it("a failure with no stated reason is tried three times, then answered publicly", async () => {
+    const { db, client, poll } = await setup();
+    client.pages.set("reel_1", [[cmt("a1", "ann", "tiktok", 10)]]);
+    let attempts = 0;
+    client.privateReplyText = async () => {
+      attempts++;
+      throw new InstagramApiError("An unknown error has occurred.", 500, 1);
+    };
+    for (let i = 0; i < 6; i++) await poll();
+    expect(attempts).toBe(3);
+    expect(client.replies).toEqual(["a1"]);
+    const row = await db.prepare("SELECT status FROM activity_log WHERE dedupe = 'dm:a1'").first<{ status: string }>();
+    expect(row?.status).toBe("blocked");
+  });
+
+  it("a comment that keeps failing never holds up people who have not been tried", async () => {
+    const { client, poll } = await setup();
+    client.pages.set("reel_1", [[cmt("a1", "ann", "tiktok", 10)]]);
+    const order: string[] = [];
+    client.privateReplyText = async (commentId: string, text: string) => {
+      order.push(commentId);
+      if (commentId === "a1") throw new InstagramApiError("An unknown error has occurred.", 500, 1);
+      client.sent.push({ commentId, text });
+      return { message_id: "m" };
+    };
+    await poll(); // a1 fails once
+    order.length = 0;
+    client.pages.set("reel_1", [[cmt("a3", "cat", "tiktok", 30), cmt("a2", "bob", "tiktok", 20), cmt("a1", "ann", "tiktok", 10)]]);
+    await poll();
+    expect(order).toEqual(["a3", "a2", "a1"]); // the untried two first, the retry last
+  });
+
+  it("waiting on Meta's send limit does not count as a try", async () => {
+    const { db, client, poll } = await setup();
+    client.pages.set("reel_1", [[cmt("a1", "ann", "tiktok", 10)]]);
+    client.sendError = new InstagramApiError("(#4) Application request limit reached", 403, 4);
+    for (let i = 0; i < 5; i++) {
+      await kvSet(db, "rate_limit_until", "0");
+      await poll();
+    }
+    client.sendError = null;
+    await kvSet(db, "rate_limit_until", "0");
+    await poll();
+    expect(client.sent.map((s) => s.commentId)).toEqual(["a1"]); // still delivered after five waits
   });
 
   it("ignores our own comments and comments older than the automation", async () => {
